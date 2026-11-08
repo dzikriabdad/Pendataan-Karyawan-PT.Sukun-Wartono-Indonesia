@@ -74,3 +74,6 @@ Route::put('/pendataan/update/{token}', [
     PendataanController::class,
     'updateByToken',
 ])->name('pendataan.update.token');
+
+
+

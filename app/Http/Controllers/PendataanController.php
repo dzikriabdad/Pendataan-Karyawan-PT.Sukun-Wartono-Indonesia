@@ -46,8 +46,6 @@ class PendataanController extends Controller
             'bersedia_transfer' => 'required|in:YA,TIDAK',
             'alamat_domisili'   => 'nullable|string',
 
-            // departemen_id tidak divalidasi ketat dari request karena dideteksi otomatis oleh controller
-            'departemen_id'         => 'nullable',
             'unit_organisasi_id'    => 'nullable',
             'nama_jabatan'          => 'nullable|string|max:150',
             'jabatan_borong_id'     => 'nullable|exists:jabatan_borong,id',
@@ -123,14 +121,12 @@ class PendataanController extends Controller
             }
         }
 
-        // Validasi Pasangan: Hanya jika KAWIN
         if ($request->input('status_pernikahan') === 'KAWIN' && ! $request->filled('nama_pasangan')) {
             throw ValidationException::withMessages([
                 'nama_pasangan' => 'Nama suami / istri wajib diisi.',
             ]);
         }
 
-        // Validasi Anak: JIKA BELUM MENIKAH -> JUMLAH ANAK OTOMATIS 0 (TIDAK DIVALIDASI)
         $statusPernikahan = $request->input('status_pernikahan');
         $jumlahAnak = ($statusPernikahan === 'BELUM_KAWIN') ? 0 : (int) $request->input('jumlah_anak', 0);
         $dataAnakRequest = $request->input('anak', []);
@@ -186,7 +182,6 @@ class PendataanController extends Controller
 
                 $unitId = null;
 
-                // Jika RM
                 if ($namaJabatan && str_starts_with($namaJabatan, 'RM')) {
                     $kotaId = null;
                     $areaId = null;
@@ -206,9 +201,7 @@ class PendataanController extends Controller
                             ]);
                         } catch (\Throwable $th) {}
                     }
-                }
-                // Jika AM
-                elseif ($namaJabatan && str_starts_with($namaJabatan, 'AM')) {
+                } elseif ($namaJabatan && str_starts_with($namaJabatan, 'AM')) {
                     $kotaId = null;
                     $areaId = null;
                     $wilayahAM = trim(str_replace('AM', '', $namaJabatan));
@@ -230,9 +223,7 @@ class PendataanController extends Controller
                             ]);
                         } catch (\Throwable $th) {}
                     }
-                }
-                // Staf Cabang / Sales / OB / TL / SS -> Cocokkan ke PERWAKILAN (KOTA)
-                elseif ($kotaId) {
+                } elseif ($kotaId) {
                     $namaKota = DB::table('kota_perwakilan')->where('id', $kotaId)->value('nama_kota');
                     if ($namaKota) {
                         $unitId = DB::table('unit_organisasi')
@@ -255,7 +246,6 @@ class PendataanController extends Controller
                     }
                 }
 
-                // Fallback aman: jangan pernah bernilai null
                 if (! $unitId) {
                     $unitId = DB::table('unit_organisasi')
                         ->where('departemen_id', $departemenId)
@@ -276,7 +266,6 @@ class PendataanController extends Controller
             }
             // 2. JIKA BULANAN / HARIAN
             elseif ($unitId) {
-                // Deteksi otomatis departemen dari unit kerja yang dipilih (100% akurat & aman)
                 $departemenId = DB::table('unit_organisasi')->where('id', $unitId)->value('departemen_id');
             }
             // 3. JIKA BORONG
@@ -288,7 +277,6 @@ class PendataanController extends Controller
                 }
             }
 
-            // Fallback darurat jika departemenId masih null
             if (!$departemenId && $unitId) {
                 $departemenId = DB::table('unit_organisasi')->where('id', $unitId)->value('departemen_id');
             }

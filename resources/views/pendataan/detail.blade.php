@@ -23,8 +23,8 @@
             <h1 class="text-2xl font-bold text-slate-900">Detail Lengkap Karyawan</h1>
             <p class="text-xs text-slate-500 mt-0.5">Informasi pendataan resmi PT. Sukun Wartono Indonesia</p>
         </div>
-        <a href="{{ url()->previous() !== url()->current() ? url()->previous() : url('/dashboard') }}" class="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition">
-            &larr; Kembali
+        <a href="{{ $backUrl ?? url('/hrd/dashboard') }}" class="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition">
+          &larr; Kembali ke Dashboard
         </a>
     </div>
 
