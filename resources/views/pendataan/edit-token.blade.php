@@ -23,7 +23,7 @@
 <div class="max-w-4xl mx-auto space-y-6">
     <div class="border-b pb-4">
         <h1 class="text-2xl font-bold text-blue-900">Form Kelengkapan & Perbarui Data Karyawan</h1>
-        <p class="text-sm text-slate-500 mt-1">Silakan perbarui atau lengkapi seluruh data pribadi, orang tua, keluarga, bagian kerja, jabatan, riwayat pekerjaan, dan rekening Anda di bawah ini.</p>
+        <p class="text-sm text-slate-500 mt-1">Silakan perbarui atau lengkapi seluruh data pribadi, orang tua, keluarga, bagian kerja, jabatan, riwayat pendidikan, riwayat pekerjaan, dan rekening Anda di bawah ini.</p>
     </div>
 
     @if(session('sukses'))
@@ -54,6 +54,12 @@
             'tgl_lahir_anak' => $a->tgl_lahir_anak,
             'pendidikan_anak' => $a->pendidikan_anak,
         ])->toArray() ?? []))),
+        pendList: @js(array_values(old('riwayat_pendidikan', count($pendidikan ?? []) > 0 ? $pendidikan->map(fn($p) => [
+            'jenjang' => $p->jenjang,
+            'nama_instansi' => $p->nama_instansi,
+            'jurusan' => $p->jurusan,
+            'nilai_ipk' => $p->nilai_ipk,
+        ])->toArray() : [['jenjang' => 'SD', 'nama_instansi' => '', 'jurusan' => '', 'nilai_ipk' => '']]))),
         sukunList: @js(array_values(old('riwayat_sukun', count($riwayatSukun ?? []) > 0 ? $riwayatSukun->map(fn($r) => [
             'bagian' => $r->unit_bagian,
             'jabatan' => $r->jabatan,
@@ -66,7 +72,19 @@
             'tahun_masuk' => $p->tahun_masuk,
             'tahun_keluar' => $p->tahun_keluar,
         ])->toArray() : [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']])))
-    }">
+    }"
+    x-init="
+        $watch('anakN', (val) => {
+            while(anakList.length < val) {
+                anakList.push({ nama_anak: '', tgl_lahir_anak: '', pendidikan_anak: 'BELUM SEKOLAH' });
+            }
+        });
+        $watch('nikah', (val) => {
+            if (val === 'BELUM_KAWIN') {
+                anakN = 0;
+            }
+        });
+    ">
         @csrf
         @method('PUT')
 
@@ -117,19 +135,19 @@
             </div>
         </div>
 
-        {{-- 2. INFORMASI DATA DIRI, ORANG TUA & PENDIDIKAN --}}
+        {{-- 2. INFORMASI DATA DIRI & ORANG TUA --}}
         <div class="cd space-y-4">
-            <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Informasi Pribadi, Orang Tua & Pendidikan</h3>
+            <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Informasi Pribadi & Orang Tua</h3>
             
             <div>
-                <label class="lb">Nama Lengkap Sesuai KTP</label>
-                <input type="text" value="{{ $karyawan->nama_lengkap }}" disabled class="in bg-slate-200 text-slate-600 font-semibold uppercase">
+                <label class="lb">Nama Lengkap Sesuai KTP <span class="text-xs font-normal text-slate-400">(Terkunci)</span></label>
+                <input type="text" value="{{ $karyawan->nama_lengkap }}" disabled class="in bg-slate-200 text-slate-600 font-semibold uppercase cursor-not-allowed">
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <label class="lb">NIK KTP (16 Angka)</label>
-                    <input type="text" value="{{ $karyawan->nik_ktp }}" disabled class="in bg-slate-200 text-slate-600 font-mono">
+                    <label class="lb">NIK KTP (16 Angka) <span class="text-xs font-normal text-slate-400">(Terkunci)</span></label>
+                    <input type="text" value="{{ $karyawan->nik_ktp }}" disabled class="in bg-slate-200 text-slate-600 font-mono cursor-not-allowed">
                 </div>
                 <div>
                     <label class="lb">NIP (Nomor Induk Pegawai)</label>
@@ -178,32 +196,6 @@
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <label class="lb">Pendidikan Terakhir <span class="req">*</span></label>
-                    <select name="pendidikan_terakhir" class="in" required>
-                        @foreach (['SD'=>'SD','SMP'=>'SMP / sederajat','SMA/SMK'=>'SMA / SMK / sederajat','D1'=>'D1','D2'=>'D2','D3'=>'D3','D4'=>'D4','S1'=>'S1','S2'=>'S2','S3'=>'S3'] as $v => $t)
-                            <option value="{{ $v }}" {{ old('pendidikan_terakhir', $karyawan->pendidikan_terakhir) == $v ? 'selected' : '' }}>{{ $t }}</option>
-                        @endforeach
-                    </select>
-                </div>
-                <div>
-                    <label class="lb">Jurusan / Program Studi</label>
-                    <input type="text" name="jurusan" value="{{ old('jurusan', $karyawan->jurusan) }}" class="in" placeholder="Contoh: Teknik Informatika / IPS">
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                    <label class="lb">Nama Instansi / Sekolah / Universitas</label>
-                    <input type="text" name="nama_instansi" value="{{ old('nama_instansi', $karyawan->nama_instansi) }}" class="in" placeholder="Nama sekolah / universitas">
-                </div>
-                <div>
-                    <label class="lb">Nilai Akhir / IPK</label>
-                    <input type="text" name="nilai" value="{{ old('nilai', $karyawan->nilai) }}" class="in" placeholder="Contoh: 3.50 / 85.00">
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
                     <label class="lb">Nomor WhatsApp / HP <span class="req">*</span></label>
                     <input type="text" name="no_wa" value="{{ old('no_wa', $karyawan->no_wa) }}" class="in" placeholder="08xxxxxxxxxx" required>
                 </div>
@@ -214,8 +206,8 @@
             </div>
 
             <div>
-                <label class="lb">Alamat Lengkap Sesuai KTP</label>
-                <textarea rows="2" disabled class="in bg-slate-200 text-slate-600">{{ $alamatKtp->alamat_lengkap ?? '-' }}</textarea>
+                <label class="lb">Alamat Lengkap Sesuai KTP <span class="text-xs font-normal text-slate-400">(Terkunci)</span></label>
+                <textarea rows="2" disabled class="in bg-slate-200 text-slate-600 cursor-not-allowed">{{ $alamatKtp->alamat_lengkap ?? '-' }}</textarea>
             </div>
 
             <div>
@@ -224,9 +216,63 @@
             </div>
         </div>
 
-        {{-- 3. STATUS KELUARGA & ANAK --}}
+        {{-- 3. REPEATER RIWAYAT PENDIDIKAN (SD S/D TERAKHIR TANPA TAHUN) --}}
         <div class="cd space-y-4">
-            <h3 class="text-base font-bold text-slate-900 border-b pb-2">3. Status Keluarga & Anak</h3>
+            <div class="flex items-center justify-between border-b pb-2">
+                <div>
+                    <h3 class="text-base font-bold text-slate-900">3. Riwayat Pendidikan (SD s/d Terakhir) <span class="req">*</span></h3>
+                    <p class="text-xs text-slate-500">Isi riwayat jenjang pendidikan Anda dari SD hingga pendidikan terakhir.</p>
+                </div>
+                <button type="button" @click="pendList.push({ jenjang: '', nama_instansi: '', jurusan: '', nilai_ipk: '' })" class="rounded bg-blue-100 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-200">
+                    + Tambah Pendidikan
+                </button>
+            </div>
+
+            <template x-for="(rp, index) in pendList" :key="index">
+                <div class="sb space-y-3 relative bg-white border border-slate-200 p-4 rounded-lg">
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs font-bold uppercase text-slate-400" x-text="'Pendidikan #' + (index + 1)"></span>
+                        <button type="button" x-show="pendList.length > 1" @click="pendList.splice(index, 1)" class="text-xs text-red-500 hover:underline">Hapus</button>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="lb">Jenjang Pendidikan <span class="req">*</span></label>
+                            <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" class="in" required>
+                                <option value="">-- Pilih Jenjang --</option>
+                                <option value="SD">SD</option>
+                                <option value="SMP">SMP / MTs</option>
+                                <option value="SMA/SMK">SMA / SMK / MA</option>
+                                <option value="D1">D1</option>
+                                <option value="D2">D2</option>
+                                <option value="D3">D3</option>
+                                <option value="D4">D4</option>
+                                <option value="S1">S1</option>
+                                <option value="S2">S2</option>
+                                <option value="S3">S3</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="lb">Nama Sekolah / Instansi / Universitas <span class="req">*</span></label>
+                            <input type="text" :name="'riwayat_pendidikan[' + index + '][nama_instansi]'" x-model="rp.nama_instansi" class="in uppercase" placeholder="Nama Sekolah / Kampus" required>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="lb">Jurusan / Program Studi</label>
+                            <input type="text" :name="'riwayat_pendidikan[' + index + '][jurusan]'" x-model="rp.jurusan" class="in uppercase" placeholder="Jurusan (Kosongkan jika SD/SMP)">
+                        </div>
+                        <div>
+                            <label class="lb">Nilai Akhir / IPK</label>
+                            <input type="text" :name="'riwayat_pendidikan[' + index + '][nilai_ipk]'" x-model="rp.nilai_ipk" class="in" placeholder="Nilai / IPK">
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        {{-- 4. STATUS KELUARGA & ANAK --}}
+        <div class="cd space-y-4">
+            <h3 class="text-base font-bold text-slate-900 border-b pb-2">4. Status Keluarga & Anak</h3>
             
             <div>
                 <label class="lb">Status Pernikahan <span class="req">*</span></label>
@@ -241,17 +287,17 @@
             <div x-show="nikah === 'KAWIN'" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                     <label class="lb">Nama Suami / Istri (Pasangan) <span class="req">*</span></label>
-                    <input type="text" name="nama_pasangan" value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}" class="in uppercase" placeholder="Nama lengkap pasangan">
+                    <input type="text" name="nama_pasangan" value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}" :disabled="nikah !== 'KAWIN'" class="in uppercase" placeholder="Nama lengkap pasangan">
                 </div>
                 <div>
                     <label class="lb">Pekerjaan Pasangan</label>
-                    <input type="text" name="pekerjaan_pasangan" value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}" class="in" placeholder="Pekerjaan pasangan">
+                    <input type="text" name="pekerjaan_pasangan" value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}" :disabled="nikah !== 'KAWIN'" class="in" placeholder="Pekerjaan pasangan">
                 </div>
             </div>
 
             <div x-show="nikah !== 'BELUM_KAWIN'" x-cloak class="pt-2">
                 <label class="lb">Jumlah Anak (maksimal 10)</label>
-                <select id="jumlah_anak" name="jumlah_anak" x-model.number="anakN" class="in">
+                <select id="jumlah_anak" name="jumlah_anak" x-model.number="anakN" class="in" :disabled="nikah === 'BELUM_KAWIN'">
                     <option value="0">Tidak ada / 0 anak</option>
                     <template x-for="n in 10" :key="n">
                         <option :value="n" x-text="n + ' anak'"></option>
@@ -295,11 +341,11 @@
             </div>
         </div>
 
-        {{-- 4. RIWAYAT PEKERJAAN DI SUKUN (JENJANG KARIR) --}}
+        {{-- 5. RIWAYAT PEKERJAAN DI SUKUN (JENJANG KARIR) --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
-                    <h3 class="text-base font-bold text-slate-900">4. Riwayat Pekerjaan Selama di PT. Sukun (Jenjang Karir)</h3>
+                    <h3 class="text-base font-bold text-slate-900">5. Riwayat Pekerjaan Selama di PT. Sukun (Jenjang Karir)</h3>
                     <p class="text-xs text-slate-500">Isi riwayat bagian / unit kerja dan jabatan Anda selama bekerja di PT. Sukun Wartono Indonesia.</p>
                 </div>
                 <button type="button" @click="sukunList.push({ bagian: '', jabatan: '', tahun_mulai: '', tahun_selesai: '' })" class="px-3 py-1.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-md hover:bg-blue-200">
@@ -339,11 +385,11 @@
             </template>
         </div>
 
-        {{-- 5. PENGALAMAN KERJA SEBELUM DI SUKUN (RIWAYAT LUAR) --}}
+        {{-- 6. PENGALAMAN KERJA SEBELUM DI SUKUN (RIWAYAT LUAR) --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
-                    <h3 class="text-base font-bold text-slate-900">5. Pengalaman Kerja Sebelum di Sukun</h3>
+                    <h3 class="text-base font-bold text-slate-900">6. Pengalaman Kerja Sebelum di Sukun</h3>
                     <p class="text-xs text-slate-500">Isi riwayat pekerjaan Anda di perusahaan lain sebelum bergabung dengan PT. Sukun.</p>
                 </div>
                 <button type="button" @click="luarList.push({ perusahaan: '', jabatan: '', tahun_masuk: '', tahun_keluar: '' })" class="px-3 py-1.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-md hover:bg-blue-200">
@@ -383,9 +429,9 @@
             </template>
         </div>
 
-        {{-- 6. PERBANKAN & ADMINISTRASI --}}
+        {{-- 7. PERBANKAN & ADMINISTRASI --}}
         <div class="cd space-y-4">
-            <h3 class="text-base font-bold text-slate-900 border-b pb-2">6. Perbankan & Administrasi</h3>
+            <h3 class="text-base font-bold text-slate-900 border-b pb-2">7. Perbankan & Administrasi</h3>
             
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>

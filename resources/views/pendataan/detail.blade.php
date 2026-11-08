@@ -17,14 +17,14 @@
 <body class="text-slate-800 antialiased py-8 px-4 sm:px-6">
 <div class="max-w-4xl mx-auto space-y-6">
 
-    {{-- HEADER & TOMBOL KEMBALI --}}
+    {{-- HEADER & TOMBOL KEMBALI AMAN --}}
     <div class="flex items-center justify-between">
         <div>
             <h1 class="text-2xl font-bold text-slate-900">Detail Lengkap Karyawan</h1>
             <p class="text-xs text-slate-500 mt-0.5">Informasi pendataan resmi PT. Sukun Wartono Indonesia</p>
         </div>
-        <a href="{{ $backUrl ?? url('/hrd/dashboard') }}" class="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition">
-          &larr; Kembali ke Dashboard
+        <a href="{{ $backUrl ?? url()->previous() }}" class="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition">
+            &larr; Kembali
         </a>
     </div>
 
@@ -41,19 +41,17 @@
             </a>
         </div>
         
-        {{-- FITUR SALIN LINK YANG SUDAH DIPERBAIKI --}}
+        {{-- FITUR SALIN LINK --}}
         <div class="flex items-center gap-2 pt-1" x-data="{ copied: false, link: '{{ url('/pendataan/edit/' . $karyawan->token) }}' }">
             <input type="text" readonly :value="link" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono text-slate-600">
             <button type="button" 
                     @click="
                         if (navigator.clipboard && window.isSecureContext) {
-                            // Metode utama (berjalan di HTTPS / localhost)
                             navigator.clipboard.writeText(link).then(() => {
                                 copied = true; 
                                 setTimeout(() => copied = false, 2500);
                             });
                         } else {
-                            // Metode cadangan (berjalan di HTTP biasa)
                             let textArea = document.createElement('textarea');
                             textArea.value = link;
                             textArea.style.position = 'fixed';
@@ -65,9 +63,7 @@
                                 document.execCommand('copy');
                                 copied = true; 
                                 setTimeout(() => copied = false, 2500);
-                            } catch (err) {
-                                alert('Browser Anda memblokir penyalinan otomatis. Silakan salin link secara manual.');
-                            }
+                            } catch (err) {}
                             document.body.removeChild(textArea);
                         }
                     " 
@@ -114,25 +110,6 @@
 
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t">
             <div>
-                <span class="lb">Pendidikan Terakhir</span>
-                <p class="val">{{ $karyawan->pendidikan_terakhir ?: '-' }}</p>
-            </div>
-            <div>
-                <span class="lb">Jurusan</span>
-                <p class="val">{{ $karyawan->jurusan ?: '-' }}</p>
-            </div>
-            <div>
-                <span class="lb">Instansi / Sekolah</span>
-                <p class="val">{{ $karyawan->nama_instansi ?: '-' }}</p>
-            </div>
-            <div>
-                <span class="lb">Nilai / IPK</span>
-                <p class="val">{{ $karyawan->nilai ?: '-' }}</p>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t">
-            <div>
                 <span class="lb">No. WhatsApp / HP</span>
                 <p class="val font-mono">{{ $karyawan->no_wa ?: '-' }}</p>
             </div>
@@ -161,6 +138,43 @@
                 <p class="val uppercase text-blue-900">{{ $karyawan->nama_ibu ?: '-' }}</p>
             </div>
         </div>
+    </div>
+
+    {{-- KARTU BARU: RIWAYAT PENDIDIKAN DARI SD S/D TERAKHIR --}}
+    <div class="cd space-y-4">
+        <h3 class="text-base font-bold text-slate-900 border-b pb-2 flex items-center justify-between">
+            <span>Riwayat Pendidikan (SD s/d Terakhir)</span>
+            <span class="text-xs font-normal text-slate-500">{{ count($pendidikan ?? []) }} Jenjang</span>
+        </h3>
+
+        @if(count($pendidikan ?? []) === 0)
+            <p class="text-sm text-slate-500 italic py-2">Belum ada riwayat pendidikan yang tersimpan.</p>
+        @else
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                    <thead>
+                        <tr class="border-b bg-slate-50 text-slate-600 font-semibold uppercase">
+                            <th class="py-2.5 px-3">No</th>
+                            <th class="py-2.5 px-3">Jenjang</th>
+                            <th class="py-2.5 px-3">Nama Sekolah / Instansi / Universitas</th>
+                            <th class="py-2.5 px-3">Jurusan / Program Studi</th>
+                            <th class="py-2.5 px-3">Nilai / IPK</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach($pendidikan as $index => $pd)
+                            <tr class="hover:bg-slate-50">
+                                <td class="py-2.5 px-3 font-medium text-slate-500">{{ $index + 1 }}</td>
+                                <td class="py-2.5 px-3 font-bold text-blue-700 uppercase">{{ $pd->jenjang }}</td>
+                                <td class="py-2.5 px-3 font-semibold text-slate-800 uppercase">{{ $pd->nama_instansi }}</td>
+                                <td class="py-2.5 px-3 text-slate-600 uppercase">{{ $pd->jurusan ?: '-' }}</td>
+                                <td class="py-2.5 px-3 font-mono font-medium text-slate-700">{{ $pd->nilai_ipk ?: '-' }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @endif
     </div>
 
     {{-- KARTU 2: INFORMASI PEKERJAAN & PENGGAJIAN --}}
@@ -214,7 +228,6 @@
 
     {{-- KARTU 3: ALAMAT & KELUARGA --}}
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {{-- ALAMAT --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">Alamat</h3>
             <div>
@@ -229,7 +242,6 @@
             </div>
         </div>
 
-        {{-- KELUARGA --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">Keluarga (Pernikahan & Anak)</h3>
             <div class="grid grid-cols-2 gap-3">

@@ -52,6 +52,13 @@ class PendataanController extends Controller
             'kota_perwakilan_id'    => 'nullable|exists:kota_perwakilan,id',
             'area_id'               => 'nullable|exists:area,id',
 
+            // Validasi Riwayat Pendidikan (Repeater Tanpa Tahun)
+            'riwayat_pendidikan'                 => 'required|array|min:1',
+            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
+            'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
+            'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
+
             // Nama Orang Tua (Mandatory)
             'nama_ayah'         => 'required|string|max:150',
             'nama_ibu'          => 'required|string|max:150',
@@ -68,10 +75,6 @@ class PendataanController extends Controller
             'no_wa'                   => 'nullable|string|max:30',
             'email'                   => 'nullable|email|max:150',
             'golongan_darah'          => 'nullable|string|max:5',
-            'pendidikan_terakhir'     => 'required|string|max:30',
-            'jurusan'                 => 'nullable|string|max:150',
-            'nama_instansi'           => 'nullable|string|max:150',
-            'nilai'                   => 'nullable|string|max:50',
             'disabilitas'             => 'nullable|string|max:100',
             'golongan_id'             => 'nullable|exists:golongan,id',
             'no_bpjs_kesehatan'       => 'nullable|string|max:50',
@@ -94,15 +97,17 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nik_ktp.required'            => 'Nomor KTP (NIK) wajib diisi.',
-            'nik_ktp.digits'              => 'Nomor KTP (NIK) harus pas 16 angka.',
-            'no_rekening.regex'           => 'Jika diisi, nomor rekening harus 10 angka untuk BNI atau 15 angka untuk BRI.',
-            'bersedia_transfer.required'  => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
-            'nama_ayah.required'          => 'Nama lengkap ayah kandung wajib diisi.',
-            'nama_ibu.required'           => 'Nama lengkap ibu kandung wajib diisi.',
-            'tgl_masuk_bulan.required'    => 'Bulan masuk kerja wajib dipilih.',
-            'tgl_masuk_tahun.required'    => 'Tahun masuk kerja wajib dipilih.',
-            'pendidikan_terakhir.required'=> 'Pendidikan terakhir wajib dipilih.',
+            'nik_ktp.required'                   => 'Nomor KTP (NIK) wajib diisi.',
+            'nik_ktp.digits'                     => 'Nomor KTP (NIK) harus pas 16 angka.',
+            'no_rekening.regex'                  => 'Jika diisi, nomor rekening harus 10 angka untuk BNI atau 15 angka untuk BRI.',
+            'bersedia_transfer.required'         => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
+            'nama_ayah.required'                 => 'Nama lengkap ayah kandung wajib diisi.',
+            'nama_ibu.required'                  => 'Nama lengkap ibu kandung wajib diisi.',
+            'tgl_masuk_bulan.required'           => 'Bulan masuk kerja wajib dipilih.',
+            'tgl_masuk_tahun.required'           => 'Tahun masuk kerja wajib dipilih.',
+            'riwayat_pendidikan.required'        => 'Riwayat pendidikan wajib diisi minimal 1.',
+            'riwayat_pendidikan.*.jenjang.required'       => 'Jenjang pendidikan wajib dipilih.',
+            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
         ]);
 
         $karyawanExisting = DB::table('karyawan')->where('nik_ktp', $data['nik_ktp'])->first();
@@ -175,7 +180,7 @@ class PendataanController extends Controller
             $kotaId = $request->input('kota_perwakilan_id');
             $areaId = $request->input('area_id');
 
-            // 1. JIKA DISTRIBUSI CABANG / PERWAKILAN
+            // LOGIKA KHUSUS DISTRIBUSI
             if ($request->input('tipe_karyawan') === 'DISTRIBUSI') {
                 $departemenId = DB::table('departemen')->where('nama_departemen', 'DISTRIBUSI')->value('id') 
                              ?: DB::table('departemen')->where('nama_departemen', 'like', '%DISTRIBUSI%')->value('id');
@@ -263,13 +268,9 @@ class PendataanController extends Controller
                 if (! $unitId) {
                     $unitId = DB::table('unit_organisasi')->where('departemen_id', $departemenId)->value('id');
                 }
-            }
-            // 2. JIKA BULANAN / HARIAN
-            elseif ($unitId) {
+            } elseif ($unitId) {
                 $departemenId = DB::table('unit_organisasi')->where('id', $unitId)->value('departemen_id');
-            }
-            // 3. JIKA BORONG
-            elseif ($request->input('tipe_karyawan') === 'BORONG') {
+            } elseif ($request->input('tipe_karyawan') === 'BORONG') {
                 $departemenId = DB::table('departemen')->where('nama_departemen', 'like', '%PRODUKSI%')
                              ->orWhere('nama_departemen', 'like', '%BORONG%')->value('id');
                 if (!$unitId && $departemenId) {
@@ -281,6 +282,10 @@ class PendataanController extends Controller
                 $departemenId = DB::table('unit_organisasi')->where('id', $unitId)->value('departemen_id');
             }
 
+            // Ambil pendidikan terakhir untuk rangkuman di tabel karyawan
+            $listPend = $data['riwayat_pendidikan'] ?? [];
+            $pendidikanPalingAkhir = end($listPend);
+
             $statusVerifikasi = ($inputNip !== '' && !empty($noRek)) ? 'LENGKAP' : 'BELUM_LENGKAP';
 
             $karyawanId = DB::table('karyawan')->insertGetId([
@@ -291,10 +296,10 @@ class PendataanController extends Controller
                 'jenis_kelamin'             => $data['jenis_kelamin'],
                 'tgl_lahir'                 => $data['tgl_lahir'],
                 'golongan_darah'            => $request->input('golongan_darah', '-'),
-                'pendidikan_terakhir'       => $request->input('pendidikan_terakhir'),
-                'jurusan'                   => $request->input('jurusan'),
-                'nama_instansi'             => $request->input('nama_instansi'),
-                'nilai'                     => $request->input('nilai'),
+                'pendidikan_terakhir'       => $pendidikanPalingAkhir['jenjang'] ?? 'SD',
+                'jurusan'                   => !empty($pendidikanPalingAkhir['jurusan']) ? strtoupper($pendidikanPalingAkhir['jurusan']) : null,
+                'nama_instansi'             => !empty($pendidikanPalingAkhir['nama_instansi']) ? strtoupper($pendidikanPalingAkhir['nama_instansi']) : null,
+                'nilai'                     => $pendidikanPalingAkhir['nilai_ipk'] ?? null,
                 'no_wa'                     => $request->input('no_wa'),
                 'email'                     => $request->input('email'),
                 'nama_ayah'                 => strtoupper($data['nama_ayah']),
@@ -324,6 +329,21 @@ class PendataanController extends Controller
                 'created_at'                => now(),
                 'updated_at'                => now(),
             ]);
+
+            // SIMPAN RIWAYAT PENDIDIKAN KE TABEL riwayat_pendidikan (TANPA TAHUN)
+            foreach ($data['riwayat_pendidikan'] as $pend) {
+                if (!empty($pend['jenjang']) && !empty($pend['nama_instansi'])) {
+                    DB::table('riwayat_pendidikan')->insert([
+                        'karyawan_id'   => $karyawanId,
+                        'jenjang'       => strtoupper($pend['jenjang']),
+                        'nama_instansi' => strtoupper($pend['nama_instansi']),
+                        'jurusan'       => !empty($pend['jurusan']) ? strtoupper($pend['jurusan']) : null,
+                        'nilai_ipk'     => !empty($pend['nilai_ipk']) ? $pend['nilai_ipk'] : null,
+                        'created_at'    => now(),
+                        'updated_at'    => now(),
+                    ]);
+                }
+            }
 
             DB::table('alamat')->insert([
                 'karyawan_id'    => $karyawanId,
@@ -448,10 +468,15 @@ class PendataanController extends Controller
         $alamat = DB::table('alamat')->where('karyawan_id', $id)->get();
         $pasangan = DB::table('pasangan')->where('karyawan_id', $id)->first();
         $anak = DB::table('anak')->where('karyawan_id', $id)->orderBy('anak_ke')->get();
+        $pendidikan = DB::table('riwayat_pendidikan')->where('karyawan_id', $id)->get();
         $pengalaman = DB::table('pengalaman_kerja_sebelum')->where('karyawan_id', $id)->get();
         $riwayatSukun = DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $id)->get();
 
-        return view('pendataan.detail', compact('karyawan', 'alamat', 'pasangan', 'anak', 'pengalaman', 'riwayatSukun'));
+        // Deteksi role untuk backUrl
+        $role = strtoupper((string) (session('role') ?? session('pengguna_role') ?? session('user_role') ?? 'HRD'));
+        $backUrl = in_array($role, ['ATASAN', 'KEPALA_BAGIAN']) ? url('/atasan/dashboard') : url('/hrd/dashboard');
+
+        return view('pendataan.detail', compact('karyawan', 'alamat', 'pasangan', 'anak', 'pendidikan', 'pengalaman', 'riwayatSukun', 'backUrl'));
     }
 
     public function editHrd($id)
@@ -465,6 +490,7 @@ class PendataanController extends Controller
         $alamatDom = DB::table('alamat')->where('karyawan_id', $id)->where('jenis_alamat', 'DOMISILI')->first();
         $pasangan = DB::table('pasangan')->where('karyawan_id', $id)->first();
         $anak = DB::table('anak')->where('karyawan_id', $id)->orderBy('anak_ke')->get();
+        $pendidikan = DB::table('riwayat_pendidikan')->where('karyawan_id', $id)->get();
         $riwayatLuar = DB::table('pengalaman_kerja_sebelum')->where('karyawan_id', $id)->get();
         $riwayatSukun = DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $id)->get();
 
@@ -474,6 +500,7 @@ class PendataanController extends Controller
             'alamatDom'         => $alamatDom,
             'pasangan'          => $pasangan,
             'anak'              => $anak,
+            'pendidikan'        => $pendidikan,
             'riwayatLuar'       => $riwayatLuar,
             'riwayatSukun'      => $riwayatSukun,
             'departemen'        => DB::table('departemen')->get(),
@@ -555,6 +582,25 @@ class PendataanController extends Controller
                 );
             }
 
+            // Sync Riwayat Pendidikan
+            if ($request->has('riwayat_pendidikan')) {
+                DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
+                $listP = $request->input('riwayat_pendidikan', []);
+                foreach ($listP as $rp) {
+                    if (!empty($rp['jenjang']) && !empty($rp['nama_instansi'])) {
+                        DB::table('riwayat_pendidikan')->insert([
+                            'karyawan_id'   => $karyawan->id,
+                            'jenjang'       => strtoupper($rp['jenjang']),
+                            'nama_instansi' => strtoupper($rp['nama_instansi']),
+                            'jurusan'       => !empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
+                            'nilai_ipk'     => !empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                            'created_at'    => now(),
+                            'updated_at'    => now(),
+                        ]);
+                    }
+                }
+            }
+
             // Sync Pasangan
             if ($statusPernikahan === 'KAWIN' && $request->filled('nama_pasangan')) {
                 DB::table('pasangan')->updateOrInsert(
@@ -585,7 +631,7 @@ class PendataanController extends Controller
                 }
             }
 
-            // Sync Riwayat Sukun (Jenjang Karir)
+            // Sync Riwayat Sukun
             DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $karyawan->id)->delete();
             $riwayatSukun = $request->input('riwayat_sukun', []);
             foreach ($riwayatSukun as $rw) {
@@ -627,6 +673,7 @@ class PendataanController extends Controller
             DB::table('alamat')->where('karyawan_id', $id)->delete();
             DB::table('pasangan')->where('karyawan_id', $id)->delete();
             DB::table('anak')->where('karyawan_id', $id)->delete();
+            DB::table('riwayat_pendidikan')->where('karyawan_id', $id)->delete();
             DB::table('pengalaman_kerja_sebelum')->where('karyawan_id', $id)->delete();
             DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $id)->delete();
             DB::table('karyawan')->where('id', $id)->delete();
@@ -649,6 +696,7 @@ class PendataanController extends Controller
         $alamatDom = DB::table('alamat')->where('karyawan_id', $karyawan->id)->where('jenis_alamat', 'DOMISILI')->first();
         $pasangan = DB::table('pasangan')->where('karyawan_id', $karyawan->id)->first();
         $anak = DB::table('anak')->where('karyawan_id', $karyawan->id)->orderBy('anak_ke')->get();
+        $pendidikan = DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->get();
         $pengalaman = DB::table('pengalaman_kerja_sebelum')->where('karyawan_id', $karyawan->id)->get();
         $riwayatSukun = DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $karyawan->id)->get();
 
@@ -658,6 +706,7 @@ class PendataanController extends Controller
             'alamatDom'      => $alamatDom,
             'pasangan'       => $pasangan,
             'anak'           => $anak,
+            'pendidikan'     => $pendidikan,
             'pengalaman'     => $pengalaman,
             'riwayatSukun'   => $riwayatSukun,
             'departemen'     => DB::table('departemen')->get(),
@@ -677,7 +726,6 @@ class PendataanController extends Controller
             'nama_ibu'            => 'required|string|max:150',
             'jenis_kelamin'       => 'required|in:L,P',
             'tgl_lahir'           => 'required|date',
-            'pendidikan_terakhir' => 'required|string|max:30',
             'no_wa'               => 'required|string|max:30',
             'alamat_domisili'     => 'required|string',
             'status_pernikahan'   => 'required|in:BELUM_KAWIN,KAWIN,CERAI_HIDUP,CERAI_MATI',
@@ -707,10 +755,6 @@ class PendataanController extends Controller
                 'jenis_kelamin'             => $request->input('jenis_kelamin'),
                 'tgl_lahir'                 => $request->input('tgl_lahir'),
                 'golongan_darah'            => $request->input('golongan_darah'),
-                'pendidikan_terakhir'       => $request->input('pendidikan_terakhir'),
-                'jurusan'                   => $request->input('jurusan'),
-                'nama_instansi'             => $request->input('nama_instansi'),
-                'nilai'                     => $request->input('nilai'),
                 'no_wa'                     => $request->input('no_wa'),
                 'email'                     => $request->input('email'),
                 'nama_ayah'                 => strtoupper($request->input('nama_ayah')),
@@ -738,6 +782,25 @@ class PendataanController extends Controller
                 ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'DOMISILI'],
                 ['alamat_lengkap' => $request->input('alamat_domisili')]
             );
+
+            // Sync Riwayat Pendidikan
+            if ($request->has('riwayat_pendidikan')) {
+                DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
+                $listP = $request->input('riwayat_pendidikan', []);
+                foreach ($listP as $rp) {
+                    if (!empty($rp['jenjang']) && !empty($rp['nama_instansi'])) {
+                        DB::table('riwayat_pendidikan')->insert([
+                            'karyawan_id'   => $karyawan->id,
+                            'jenjang'       => strtoupper($rp['jenjang']),
+                            'nama_instansi' => strtoupper($rp['nama_instansi']),
+                            'jurusan'       => !empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
+                            'nilai_ipk'     => !empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                            'created_at'    => now(),
+                            'updated_at'    => now(),
+                        ]);
+                    }
+                }
+            }
 
             if ($statusPernikahan === 'KAWIN' && $request->filled('nama_pasangan')) {
                 DB::table('pasangan')->updateOrInsert(
@@ -809,7 +872,7 @@ class PendataanController extends Controller
         $response = new StreamedResponse(function() use ($dataExport) {
             $handle = fopen('php://output', 'w');
             fputcsv($handle, [
-                'No', 'Nama Lengkap', 'NIP', 'NIK', 'Jenis Kelamin', 'Pendidikan', 'Jurusan', 'Tgl Lahir', 
+                'No', 'Nama Lengkap', 'NIP', 'NIK', 'Jenis Kelamin', 'Pendidikan Terakhir', 'Tgl Lahir', 
                 'Nama Ayah', 'Nama Ibu', 'Alamat KTP', 'Alamat Domisili', 'No HP/WA', 'Email', 'Jabatan', 
                 'Unit', 'Tgl Masuk', 'Pernikahan', 'Disabilitas', 'No Rekening', 'BPJS Kes', 'BPJS Ket', 'NPWP', 'Pasangan', 'Pekerjaan Pasangan', 'Jml Anak'
             ]);
@@ -822,7 +885,7 @@ class PendataanController extends Controller
 
                 fputcsv($handle, [
                     $no++, $row->nama_lengkap, $row->nip ?? '-', $row->nik_ktp, $row->jenis_kelamin,
-                    $row->pendidikan_terakhir, $row->jurusan ?? '-', $row->tgl_lahir,
+                    $row->pendidikan_terakhir, $row->tgl_lahir,
                     $row->nama_ayah ?? '-', $row->nama_ibu ?? '-',
                     $alamatKtp, $alamatDom, $row->no_wa ?? '-', $row->email ?? '-', $row->nama_jabatan ?? '-', $row->nama_unit ?? '-',
                     $row->tgl_masuk_kerja, $row->status_pernikahan, $row->disabilitas ?? '-', $row->no_rekening ?? '-',
