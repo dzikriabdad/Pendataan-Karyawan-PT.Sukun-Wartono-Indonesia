@@ -1,0 +1,181 @@
+CREATE TABLE DEPARTEMEN (
+    id INT PRIMARY KEY,
+    kode_departemen VARCHAR(30) UNIQUE,
+    nama_departemen VARCHAR(100)
+);
+
+CREATE TABLE UNIT_ORGANISASI (
+    id INT PRIMARY KEY,
+    departemen_id INT,
+    nama_unit VARCHAR(100) UNIQUE,
+    tipe_unit VARCHAR(30),
+    target_kuota INT,
+    FOREIGN KEY (departemen_id) REFERENCES DEPARTEMEN(id)
+);
+
+CREATE TABLE PENGGUNA (
+    id INT PRIMARY KEY,
+    karyawan_id BIGINT,
+    username VARCHAR(50) UNIQUE,
+    password_hash VARCHAR(255),
+    role VARCHAR(30),
+    is_active BOOLEAN
+);
+
+CREATE TABLE ATASAN_UNIT (
+    id INT PRIMARY KEY,
+    pengguna_id INT,
+    unit_organisasi_id INT,
+    can_verify BOOLEAN,
+    FOREIGN KEY (pengguna_id) REFERENCES PENGGUNA(id),
+    FOREIGN KEY (unit_organisasi_id) REFERENCES UNIT_ORGANISASI(id)
+);
+
+CREATE TABLE GOLONGAN (
+    id INT PRIMARY KEY,
+    kode_golongan VARCHAR(10) UNIQUE
+);
+
+CREATE TABLE BANK (
+    id INT PRIMARY KEY,
+    nama_bank VARCHAR(10) UNIQUE,
+    panjang_digit TINYINT
+);
+
+CREATE TABLE JABATAN (
+    id INT PRIMARY KEY,
+    nama_jabatan VARCHAR(100) UNIQUE,
+    kategori VARCHAR(20)
+);
+
+CREATE TABLE JABATAN_BORONG (
+    id INT PRIMARY KEY,
+    nama_jabatan_borong VARCHAR(50) UNIQUE
+);
+
+CREATE TABLE JABATAN_DISTRIBUSI (
+    id INT PRIMARY KEY,
+    kode_jabatan VARCHAR(20) UNIQUE,
+    nama_jabatan VARCHAR(100)
+);
+
+CREATE TABLE UNIT_KOTA (
+    id INT PRIMARY KEY,
+    nama_unit_kota VARCHAR(20) UNIQUE
+);
+
+CREATE TABLE KOTA_PERWAKILAN (
+    id INT PRIMARY KEY,
+    unit_kota_id INT,
+    nama_kota VARCHAR(100) UNIQUE,
+    FOREIGN KEY (unit_kota_id) REFERENCES UNIT_KOTA(id)
+);
+
+CREATE TABLE AREA (
+    id INT PRIMARY KEY,
+    nama_area VARCHAR(100) UNIQUE
+);
+
+CREATE TABLE KARYAWAN (
+    id BIGINT PRIMARY KEY,
+    nip VARCHAR(30) UNIQUE,
+    nik_ktp CHAR(16) UNIQUE,
+    nama_lengkap VARCHAR(150),
+    jenis_kelamin CHAR(1),
+    tgl_lahir DATE,
+    golongan_darah VARCHAR(3),
+    pendidikan_terakhir VARCHAR(30),
+    jurusan VARCHAR(100),
+    no_wa VARCHAR(20),
+    email VARCHAR(120),
+    status_pernikahan VARCHAR(30),
+    disabilitas VARCHAR(100),
+    tipe_karyawan VARCHAR(20),
+    ket_karyawan VARCHAR(20),
+    departemen_id INT,
+    unit_organisasi_id INT,
+    golongan_id INT,
+    jabatan_id INT,
+    jabatan_borong_id INT,
+    jabatan_distribusi_id INT,
+    kota_perwakilan_id INT,
+    area_id INT,
+    tgl_masuk_kerja DATE,
+    tgl_penetapan DATE,
+    bank_id INT,
+    no_rekening VARCHAR(25),
+    nama_pemilik_rekening VARCHAR(150),
+    no_bpjs_kesehatan VARCHAR(25),
+    no_bpjs_ketenagakerjaan VARCHAR(25),
+    npwp VARCHAR(25),
+    no_anggota_koperasi VARCHAR(30),
+    status_pendataan VARCHAR(20),
+    status_verifikasi VARCHAR(20),
+    catatan_verifikasi TEXT,
+    sumber_data VARCHAR(20),
+    FOREIGN KEY (departemen_id) REFERENCES DEPARTEMEN(id),
+    FOREIGN KEY (unit_organisasi_id) REFERENCES UNIT_ORGANISASI(id),
+    FOREIGN KEY (golongan_id) REFERENCES GOLONGAN(id),
+    FOREIGN KEY (jabatan_id) REFERENCES JABATAN(id),
+    FOREIGN KEY (jabatan_borong_id) REFERENCES JABATAN_BORONG(id),
+    FOREIGN KEY (jabatan_distribusi_id) REFERENCES JABATAN_DISTRIBUSI(id),
+    FOREIGN KEY (kota_perwakilan_id) REFERENCES KOTA_PERWAKILAN(id),
+    FOREIGN KEY (area_id) REFERENCES AREA(id),
+    FOREIGN KEY (bank_id) REFERENCES BANK(id)
+);
+
+CREATE TABLE TOKEN_PENDATAAN (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT,
+    token VARCHAR(64) UNIQUE,
+    expired_at DATETIME,
+    used_at DATETIME,
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
+
+CREATE TABLE ALAMAT (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT,
+    jenis_alamat VARCHAR(20),
+    alamat_lengkap TEXT,
+    kota VARCHAR(100),
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
+
+CREATE TABLE PASANGAN (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT UNIQUE,
+    nama_pasangan VARCHAR(150),
+    pekerjaan_pasangan VARCHAR(100),
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
+
+CREATE TABLE ANAK (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT,
+    anak_ke TINYINT,
+    nama_anak VARCHAR(150),
+    tgl_lahir_anak DATE,
+    pendidikan_anak VARCHAR(50),
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
+
+CREATE TABLE PENGALAMAN_KERJA_SEBELUM (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT,
+    nama_perusahaan VARCHAR(150),
+    jabatan VARCHAR(100),
+    tahun_masuk YEAR,
+    tahun_keluar YEAR,
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
+
+CREATE TABLE RIWAYAT_PEKERJAAN_SUKUN (
+    id BIGINT PRIMARY KEY,
+    karyawan_id BIGINT,
+    unit_bagian VARCHAR(100),
+    jabatan VARCHAR(100),
+    tgl_mulai DATE,
+    tgl_selesai DATE,
+    FOREIGN KEY (karyawan_id) REFERENCES KARYAWAN(id)
+);
