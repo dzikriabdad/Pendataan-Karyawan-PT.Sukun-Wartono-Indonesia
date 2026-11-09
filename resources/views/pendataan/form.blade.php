@@ -369,7 +369,7 @@ foreach ($errors->keys() as $k) {
                     <label for="ket_karyawan" class="lb">Status karyawan <span class="req">*</span></label>
                     <select id="ket_karyawan" name="ket_karyawan" x-model="statusKerjaan" class="in">
                         <option value="TETAP">TETAP</option>
-                        <option value="TIDAK_TETAP">TIDAK TETAP</option>
+                        <option value="HARIAN_LEPAS">HARIAN LEPAS</option>
                         <option value="KONTRAK">KONTRAK</option>
                     </select>
                 </div>
@@ -432,7 +432,7 @@ foreach ($errors->keys() as $k) {
                     <div x-show="!isSatpam()">
                         <input type="text" id="nama_jabatan_text" name="nama_jabatan" x-model="jabatanDipilih"
                                class="in uppercase mt-1"
-                               :placeholder="unitId ? 'CONTOH Kabag Teknik, Kasi Remunerasi, Kapel Legal' : 'Pilih bagian / unit kerja terlebih dahulu'"
+                               :placeholder="unitId ? 'Ketik nama jabatan Anda (Contoh: Pelaksana, Staff Admin, Trainer, CCO, MT, Manager, dll)' : 'Pilih bagian / unit kerja terlebih dahulu'"
                                :disabled="tipe === 'DISTRIBUSI' || !unitId || isSatpam()">
                         <p class="hint">Ketik nama jabatan Anda saat ini sesuai penugasan kerja.</p>
                     </div>
@@ -980,7 +980,6 @@ function formKaryawan(initialData) {
                 if (!this.tglLahir) errors.tgl = 'Tanggal lahir wajib diisi.';
                 if (!String(this.alamatKtp || '').trim()) errors.alamat = 'Alamat sesuai KTP wajib diisi.';
 
-                // Validasi Riwayat Pendidikan (Minimal 1 dan wajib isi jenjang + instansi)
                 if (!this.riwayatPendidikan || this.riwayatPendidikan.length === 0) {
                     errors.pendidikan = 'Isi riwayat pendidikan Anda minimal 1 jenjang.';
                 } else {

@@ -99,7 +99,7 @@
                     <label class="lb">Status Karyawan <span class="req">*</span></label>
                     <select name="ket_karyawan" class="in" required>
                         <option value="TETAP" @selected($karyawan->ket_karyawan === 'TETAP')>TETAP</option>
-                        <option value="TIDAK_TETAP" @selected($karyawan->ket_karyawan === 'TIDAK_TETAP')>TIDAK TETAP</option>
+                        <option value="HARIAN_LEPAS" @selected($karyawan->ket_karyawan === 'HARIAN_LEPAS' || $karyawan->ket_karyawan === 'TIDAK_TETAP')>HARIAN LEPAS</option>
                         <option value="KONTRAK" @selected($karyawan->ket_karyawan === 'KONTRAK')>KONTRAK</option>
                     </select>
                 </div>
@@ -128,9 +128,9 @@
             </div>
         </div>
 
-        {{-- 2. DATA DIRI & ORANG TUA --}}
+        {{-- 2. DATA DIRI, ORANG TUA & PENDIDIKAN (SEMUA BISA DIEDIT HRD) --}}
         <div class="cd space-y-4">
-            <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Data Diri & Orang Tua</h3>
+            <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Data Diri, Orang Tua & Pendidikan</h3>
 
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
@@ -205,11 +205,11 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Alamat Lengkap Sesuai KTP <span class="req">*</span></label>
-                    <textarea name="alamat_ktp" rows="2" class="in" required>{{ old('alamat_ktp', $alamatKtp->alamat_lengkap ?? '') }}</textarea>
+                    <textarea name="alamat_ktp" rows="3" class="in" required>{{ old('alamat_ktp', $alamatKtp->alamat_lengkap ?? '') }}</textarea>
                 </div>
                 <div>
                     <label class="lb">Alamat Domisili Saat Ini <span class="req">*</span></label>
-                    <textarea name="alamat_domisili" rows="2" class="in" required>{{ old('alamat_domisili', $alamatDom->alamat_lengkap ?? '') }}</textarea>
+                    <textarea name="alamat_domisili" rows="3" class="in" required>{{ old('alamat_domisili', $alamatDom->alamat_lengkap ?? '') }}</textarea>
                 </div>
             </div>
         </div>

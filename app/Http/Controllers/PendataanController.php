@@ -32,7 +32,7 @@ class PendataanController extends Controller
             'tgl_lahir'     => 'required|date',
             'alamat_ktp'    => 'required|string',
             'tipe_karyawan' => 'required|in:BULANAN,HARIAN,BORONG,DISTRIBUSI',
-            'ket_karyawan'  => 'required|in:TETAP,TIDAK_TETAP,KONTRAK',
+            'ket_karyawan'  => 'required|in:TETAP,HARIAN_LEPAS,TIDAK_TETAP,KONTRAK',
 
             'tgl_masuk_tanggal' => 'nullable|integer|between:1,31',
             'tgl_masuk_bulan'   => 'required|integer|between:1,12',
@@ -631,7 +631,7 @@ class PendataanController extends Controller
                 }
             }
 
-            // Sync Riwayat Sukun
+            // Sync Riwayat Sukun (Jenjang Karir)
             DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $karyawan->id)->delete();
             $riwayatSukun = $request->input('riwayat_sukun', []);
             foreach ($riwayatSukun as $rw) {

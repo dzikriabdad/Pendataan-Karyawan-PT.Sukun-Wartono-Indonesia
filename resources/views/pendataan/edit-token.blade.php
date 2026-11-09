@@ -106,7 +106,7 @@
                     <label class="lb">Status Karyawan <span class="req">*</span></label>
                     <select name="ket_karyawan" class="in" required>
                         <option value="TETAP" @selected($karyawan->ket_karyawan === 'TETAP')>TETAP</option>
-                        <option value="TIDAK_TETAP" @selected($karyawan->ket_karyawan === 'TIDAK_TETAP')>TIDAK TETAP</option>
+                        <option value="HARIAN_LEPAS" @selected($karyawan->ket_karyawan === 'HARIAN_LEPAS' || $karyawan->ket_karyawan === 'TIDAK_TETAP')>HARIAN LEPAS</option>
                         <option value="KONTRAK" @selected($karyawan->ket_karyawan === 'KONTRAK')>KONTRAK</option>
                     </select>
                 </div>
@@ -223,7 +223,7 @@
                     <h3 class="text-base font-bold text-slate-900">3. Riwayat Pendidikan (SD s/d Terakhir) <span class="req">*</span></h3>
                     <p class="text-xs text-slate-500">Isi riwayat jenjang pendidikan Anda dari SD hingga pendidikan terakhir.</p>
                 </div>
-                <button type="button" @click="pendList.push({ jenjang: '', nama_instansi: '', jurusan: '', nilai_ipk: '' })" class="rounded bg-blue-100 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-200">
+                <button type="button" @click="pendList.push({ jenjang: '', nama_instansi: '', jurusan: '', nilai_ipk: '' })" class="px-3 py-1.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-md hover:bg-blue-200">
                     + Tambah Pendidikan
                 </button>
             </div>
