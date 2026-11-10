@@ -39,9 +39,9 @@ class PendataanController extends Controller
             'tgl_masuk_tahun'   => 'required|integer|between:1970,' . now()->year,
 
             'no_rekening' => [
-                'nullable',
-                'regex:/^(?:[0-9]{10}|[0-9]{15})$/',
-            ],
+             'nullable',
+              'regex:/^(?:[0-9]{9,10}|[0-9]{15})$/',
+            ],  
             
             'bersedia_transfer' => 'required|in:YA,TIDAK',
             'alamat_domisili'   => 'nullable|string',
@@ -99,7 +99,7 @@ class PendataanController extends Controller
         ], [
             'nik_ktp.required'                   => 'Nomor KTP (NIK) wajib diisi.',
             'nik_ktp.digits'                     => 'Nomor KTP (NIK) harus pas 16 angka.',
-            'no_rekening.regex'                  => 'Jika diisi, nomor rekening harus 10 angka untuk BNI atau 15 angka untuk BRI.',
+            'no_rekening.regex'                  => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
             'bersedia_transfer.required'         => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
             'nama_ayah.required'                 => 'Nama lengkap ayah kandung wajib diisi.',
             'nama_ibu.required'                  => 'Nama lengkap ibu kandung wajib diisi.',
@@ -169,8 +169,8 @@ class PendataanController extends Controller
             $bankId = null;
 
             if (strlen($noRek) === 15) {
-                $bankId = DB::table('bank')->where('nama_bank', 'BRI')->value('id');
-            } elseif (strlen($noRek) === 10) {
+               $bankId = DB::table('bank')->where('nama_bank', 'BRI')->value('id');
+            } elseif (strlen($noRek) === 9 || strlen($noRek) === 10) {
                 $bankId = DB::table('bank')->where('nama_bank', 'BNI')->value('id');
             }
 
@@ -380,7 +380,7 @@ class PendataanController extends Controller
                 }
             }
 
-            // SIMPAN RIWAYAT PEKERJAAN SUKUN
+            // SIMPAN RIWAYAT PEKERJAAN SUKUN (Otomatis konversi 2001 -> 2001-01-01)
             $colSukunType = 'varchar';
             try {
                 $colInfo = DB::selectOne("SHOW COLUMNS FROM riwayat_pekerjaan_sukun WHERE Field = 'tgl_mulai'");
@@ -526,7 +526,7 @@ class PendataanController extends Controller
         $bankId = null;
         if (strlen($noRek) === 15) {
             $bankId = DB::table('bank')->where('nama_bank', 'BRI')->value('id');
-        } elseif (strlen($noRek) === 10) {
+        } elseif (strlen($noRek) === 9 || strlen($noRek) === 10) {
             $bankId = DB::table('bank')->where('nama_bank', 'BNI')->value('id');
         }
 
@@ -631,17 +631,24 @@ class PendataanController extends Controller
                 }
             }
 
-            // Sync Riwayat Sukun (Jenjang Karir)
+            // Sync Riwayat Sukun (Jenjang Karir) - PERBAIKAN TANGGAL DI SINI
             DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $karyawan->id)->delete();
             $riwayatSukun = $request->input('riwayat_sukun', []);
             foreach ($riwayatSukun as $rw) {
                 if (!empty($rw['bagian']) || !empty($rw['jabatan']) || !empty($rw['tahun_mulai'])) {
+                    
+                    $thnMulai = trim((string)($rw['tahun_mulai'] ?? ''));
+                    $thnSelesai = trim((string)($rw['tahun_selesai'] ?? ''));
+                    
+                    $valMulai = $thnMulai ? (strlen($thnMulai) === 4 ? $thnMulai . '-01-01' : $thnMulai) : null;
+                    $valSelesai = $thnSelesai ? (strlen($thnSelesai) === 4 ? $thnSelesai . '-12-31' : $thnSelesai) : null;
+
                     DB::table('riwayat_pekerjaan_sukun')->insert([
                         'karyawan_id' => $karyawan->id,
                         'unit_bagian' => $rw['bagian'] ?? null,
                         'jabatan'     => $rw['jabatan'] ?? null,
-                        'tgl_mulai'   => $rw['tahun_mulai'] ?? null,
-                        'tgl_selesai' => $rw['tahun_selesai'] ?? null,
+                        'tgl_mulai'   => $valMulai,
+                        'tgl_selesai' => $valSelesai,
                         'created_at'  => now(),
                         'updated_at'  => now(),
                     ]);
@@ -654,7 +661,7 @@ class PendataanController extends Controller
             foreach ($riwayatLuar as $rwl) {
                 if (!empty($rwl['perusahaan']) || !empty($rwl['jabatan']) || !empty($rwl['tahun_masuk'])) {
                     DB::table('pengalaman_kerja_sebelum')->insert([
-                        'karyawan_id'     => $karyawanId,
+                        'karyawan_id'     => $karyawan->id,
                         'nama_perusahaan' => $rwl['perusahaan'] ?? null,
                         'jabatan'         => $rwl['jabatan'] ?? null,
                         'tahun_masuk'     => $rwl['tahun_masuk'] ?? null,
@@ -736,7 +743,7 @@ class PendataanController extends Controller
         $bankId = null;
         if (strlen($noRek) === 15) {
             $bankId = DB::table('bank')->where('nama_bank', 'BRI')->value('id');
-        } elseif (strlen($noRek) === 10) {
+        } elseif (strlen($noRek) === 9 || strlen($noRek) === 10) {
             $bankId = DB::table('bank')->where('nama_bank', 'BNI')->value('id');
         }
 
@@ -831,17 +838,24 @@ class PendataanController extends Controller
                 }
             }
 
-            // Sync Riwayat Sukun
+            // Sync Riwayat Sukun - PERBAIKAN TANGGAL DI SINI
             DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $karyawan->id)->delete();
             $riwayatSukun = $request->input('riwayat_sukun', []);
             foreach ($riwayatSukun as $rw) {
                 if (!empty($rw['bagian']) || !empty($rw['jabatan']) || !empty($rw['tahun_mulai'])) {
+                    
+                    $thnMulai = trim((string)($rw['tahun_mulai'] ?? ''));
+                    $thnSelesai = trim((string)($rw['tahun_selesai'] ?? ''));
+                    
+                    $valMulai = $thnMulai ? (strlen($thnMulai) === 4 ? $thnMulai . '-01-01' : $thnMulai) : null;
+                    $valSelesai = $thnSelesai ? (strlen($thnSelesai) === 4 ? $thnSelesai . '-12-31' : $thnSelesai) : null;
+
                     DB::table('riwayat_pekerjaan_sukun')->insert([
                         'karyawan_id' => $karyawan->id,
                         'unit_bagian' => $rw['bagian'] ?? null,
                         'jabatan'     => $rw['jabatan'] ?? null,
-                        'tgl_mulai'   => $rw['tahun_mulai'] ?? null,
-                        'tgl_selesai' => $rw['tahun_selesai'] ?? null,
+                        'tgl_mulai'   => $valMulai,
+                        'tgl_selesai' => $valSelesai,
                         'created_at'  => now(),
                         'updated_at'  => now(),
                     ]);
@@ -854,7 +868,7 @@ class PendataanController extends Controller
             foreach ($riwayatLuar as $rwl) {
                 if (!empty($rwl['perusahaan']) || !empty($rwl['jabatan']) || !empty($rwl['tahun_masuk'])) {
                     DB::table('pengalaman_kerja_sebelum')->insert([
-                        'karyawan_id'     => $karyawanId,
+                        'karyawan_id'     => $karyawan->id,
                         'nama_perusahaan' => $rwl['perusahaan'] ?? null,
                         'jabatan'         => $rwl['jabatan'] ?? null,
                         'tahun_masuk'     => $rwl['tahun_masuk'] ?? null,

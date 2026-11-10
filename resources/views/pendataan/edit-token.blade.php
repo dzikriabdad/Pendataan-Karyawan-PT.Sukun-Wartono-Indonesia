@@ -435,7 +435,7 @@
             
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <label class="lb">Nomor Rekening (10 digit BNI / 15 digit BRI)</label>
+                    <label class="lb">Nomor Rekening (9-10 digit BNI / 15 digit BRI)</label>
                     <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="Nomor rekening">
                 </div>
                 <div>

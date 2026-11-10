@@ -556,7 +556,7 @@ foreach ($errors->keys() as $k) {
             <div class="space-y-4">
                 <div>
                     <label for="no_rekening" class="lb">
-                        Nomor rekening (BRI 15 angka / BNI 10 angka)
+                        Nomor rekening (BRI 15 angka / BNI 9-10 angka)
                     </label>
                     <input id="no_rekening" type="text" name="no_rekening" x-model="rek"
                            maxlength="15" inputmode="numeric"
