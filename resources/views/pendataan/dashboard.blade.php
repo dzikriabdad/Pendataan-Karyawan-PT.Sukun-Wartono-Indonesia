@@ -30,6 +30,31 @@
 
 <main class="mx-auto max-w-7xl px-6 py-8">
     
+    <!-- BLOK NOTIFIKASI (SUKSES & ERROR) -->
+    @if(session('sukses'))
+        <div class="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800 shadow-sm">
+            {{ session('sukses') }}
+        </div>
+    @endif
+
+    @if(session('error'))
+        <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800 shadow-sm">
+            ⚠️ {{ session('error') }}
+        </div>
+    @endif
+
+    @if($errors->any())
+        <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800 shadow-sm">
+            <p>Terdapat kesalahan saat memproses data:</p>
+            <ul class="list-inside list-disc font-normal mt-1">
+                @foreach($errors->all() as $err)
+                    <li>{{ $err }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
+    <!-- END BLOK NOTIFIKASI -->
+
     <!-- Bagian Filter & Counter -->
     <div class="mb-6 flex flex-col md:flex-row gap-4 md:items-end justify-between rounded-xl bg-white p-5 shadow">
         
@@ -39,6 +64,13 @@
             <p class="mt-1 text-3xl font-bold text-blue-800">
                 {{ $totalData ?? 0 }}
             </p>
+            @if(request('search') || request('departemen'))
+                <p class="text-xs text-blue-600 mt-1 font-medium">
+                    🔍 Filter aktif: 
+                    @if(request('search')) [Pencarian: "{{ request('search') }}"] @endif
+                    @if(request('departemen')) [Departemen: "{{ request('departemen') }}"] @endif
+                </p>
+            @endif
         </div>
 
         <!-- Form Filter -->
@@ -67,7 +99,7 @@
                 <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition">
                     Filter
                 </button>
-                <a href="{{ url()->current() }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 transition">
+                <a href="{{ url()->current() }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">
                     Reset
                 </a>
                 
@@ -98,7 +130,7 @@
                             <th class="px-4 py-3">Tipe</th>
                         @endif
 
-                        {{-- Kolom Status Data kini MUNCUL untuk HRD maupun ATASAN --}}
+                        {{-- Kolom Status Data --}}
                         <th class="px-4 py-3">Status Data</th>
                     </tr>
                 </thead>
@@ -109,7 +141,6 @@
                             <td class="px-4 py-3">{{ $karyawan->firstItem() + $index }}</td>
                             <td class="px-4 py-3">{{ $item->nik_ktp }}</td>
                             <td class="px-4 py-3 font-semibold">
-                                {{-- HANYA Admin HR yang bisa klik nama untuk buka detail. Kepala Bagian hanya teks biasa --}}
                                 @if(isset($mode) && $mode === 'HRD')
                                     <a href="{{ route('pendataan.detail', $item->id) }}" class="text-blue-600 hover:underline hover:text-blue-800">
                                         {{ $item->nama_lengkap }}
@@ -151,10 +182,10 @@
             </table>
         </div>
         
-        <!-- Pagging UI -->
+        <!-- Paging UI dengan withQueryString supaya filter & pagination halaman 2,3 dst tetap nyantol -->
         @if($karyawan->hasPages())
             <div class="border-t border-slate-200 bg-white px-4 py-3">
-                {{ $karyawan->links() }}
+                {{ $karyawan->withQueryString()->links() }}
             </div>
         @endif
     </div>

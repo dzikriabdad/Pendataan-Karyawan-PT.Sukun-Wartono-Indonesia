@@ -560,8 +560,8 @@ foreach ($errors->keys() as $k) {
                     </label>
                     <input id="no_rekening" type="text" name="no_rekening" x-model="rek"
                            maxlength="15" inputmode="numeric"
-                           pattern="^(\d{10}|\d{15})?$"
-                           title="Kosongkan, atau masukkan 10 angka (BNI) / 15 angka (BRI)"
+                           pattern="^(\d{9,10}|\d{15})?$"
+                           title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)"
                            placeholder="Kosongkan jika tidak ada/belum tahu"
                            class="in tracking-wide">
                     <p class="hint" :class="bank().w" x-text="bank().p"></p>
@@ -980,6 +980,11 @@ function formKaryawan(initialData) {
                 if (!this.tglLahir) errors.tgl = 'Tanggal lahir wajib diisi.';
                 if (!String(this.alamatKtp || '').trim()) errors.alamat = 'Alamat sesuai KTP wajib diisi.';
 
+                // Validasi Email Biar Ga Typo
+                if (this.emailForm && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.emailForm)) {
+                    errors.emailForm = 'Format email tidak valid (pastikan mengandung tanda @).';
+                }
+
                 if (!this.riwayatPendidikan || this.riwayatPendidikan.length === 0) {
                     errors.pendidikan = 'Isi riwayat pendidikan Anda minimal 1 jenjang.';
                 } else {
@@ -1022,8 +1027,8 @@ function formKaryawan(initialData) {
                 if (!this.bersediaTransfer) errors.transfer = 'Pertanyaan kesediaan transfer gaji wajib dipilih.';
 
                 const jumlahDigitRekening = String(this.rek || '').replace(/\D/g, '').length;
-                if (jumlahDigitRekening > 0 && jumlahDigitRekening !== 10 && jumlahDigitRekening !== 15) {
-                    errors.rekening = 'Jika diisi, nomor rekening harus 10 angka untuk BNI atau 15 angka untuk BRI.';
+                if (jumlahDigitRekening > 0 && jumlahDigitRekening !== 9 && jumlahDigitRekening !== 10 && jumlahDigitRekening !== 15) {
+                    errors.rekening = 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.';
                 }
             }
 
@@ -1084,8 +1089,9 @@ function formKaryawan(initialData) {
             const jumlahDigit = String(this.rek || '').replace(/\D/g, '').length;
             if (jumlahDigit === 15) return { w: 'text-emerald-700', p: 'Terdeteksi BRI (15 angka)' };
             if (jumlahDigit === 10) return { w: 'text-emerald-700', p: 'Terdeteksi BNI (10 angka)' };
+            if (jumlahDigit === 9) return { w: 'text-emerald-700', p: 'Terdeteksi BNI Taplus Lama (9 angka)' };
             if (jumlahDigit === 0) return { w: 'text-slate-500', p: 'Opsional. Boleh dikosongkan.' };
-            return { w: 'text-red-600', p: 'Jumlah angka saat ini ' + jumlahDigit + ' (wajib 15 untuk BRI, 10 untuk BNI)' };
+            return { w: 'text-red-600', p: 'Jumlah angka saat ini ' + jumlahDigit + ' (wajib 15 untuk BRI, 9-10 untuk BNI)' };
         }
     });
 }

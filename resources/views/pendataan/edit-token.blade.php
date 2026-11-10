@@ -151,7 +151,7 @@
                 </div>
                 <div>
                     <label class="lb">NIP (Nomor Induk Pegawai)</label>
-                    <input type="text" name="nip" value="{{ old('nip', $karyawan->nip) }}" class="in" placeholder="Kosongkan jika belum ada">
+                    <input type="text" name="nip" value="{{ old('nip', $karyawan->nip) }}" class="in font-mono" placeholder="Kosongkan jika belum ada">
                 </div>
             </div>
 
@@ -436,7 +436,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Nomor Rekening (9-10 digit BNI / 15 digit BRI)</label>
-                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="Nomor rekening">
+                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="BNI (9-10 digit) / BRI (15 digit)" pattern="^(\d{9,10}|\d{15})?$" title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
                 </div>
                 <div>
                     <label class="lb">Atas Nama Rekening</label>

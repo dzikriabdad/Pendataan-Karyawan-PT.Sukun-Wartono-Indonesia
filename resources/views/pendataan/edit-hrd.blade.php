@@ -198,7 +198,7 @@
                 </div>
                 <div>
                     <label class="lb">Email</label>
-                    <input type="email" name="email" value="{{ old('email', $karyawan->email) }}" class="in">
+                    <input type="email" name="email" value="{{ old('email', $karyawan->email) }}" class="in" placeholder="email@gmail.com">
                 </div>
             </div>
 
@@ -273,7 +273,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                     <label class="lb">Nomor Rekening</label>
-                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="BNI (10) / BRI (15)">
+                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="BNI (9-10) / BRI (15)" pattern="^(\d{9,10}|\d{15})?$" title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
                 </div>
                 <div>
                     <label class="lb">Atas Nama Rekening</label>
