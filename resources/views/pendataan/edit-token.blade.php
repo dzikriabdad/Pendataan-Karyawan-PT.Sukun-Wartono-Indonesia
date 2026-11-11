@@ -49,11 +49,11 @@
         jabatanDipilih: '{{ old('nama_jabatan', $karyawan->nama_jabatan) }}',
         nikah: '{{ old('status_pernikahan', $karyawan->status_pernikahan) }}', 
         anakN: {{ (int) old('jumlah_anak', count($anak ?? [])) }},
-        anakList: @js(array_values(old('anak', $anak->map(fn($a) => [
+        anakList: @js(array_values(old('anak', count($anak ?? []) > 0 ? $anak->map(fn($a) => [
             'nama_anak' => $a->nama_anak,
             'tgl_lahir_anak' => $a->tgl_lahir_anak,
             'pendidikan_anak' => $a->pendidikan_anak,
-        ])->toArray() ?? []))),
+        ])->toArray() : []))),
         pendList: @js(array_values(old('riwayat_pendidikan', count($pendidikan ?? []) > 0 ? $pendidikan->map(fn($p) => [
             'jenjang' => $p->jenjang,
             'nama_instansi' => $p->nama_instansi,
@@ -74,15 +74,19 @@
         ])->toArray() : [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']])))
     }"
     x-init="
-        $watch('anakN', (val) => {
-            while(anakList.length < val) {
+        let syncAnak = () => {
+            let target = parseInt(anakN) || 0;
+            while(anakList.length < target) {
                 anakList.push({ nama_anak: '', tgl_lahir_anak: '', pendidikan_anak: 'BELUM SEKOLAH' });
             }
-        });
-        $watch('nikah', (val) => {
-            if (val === 'BELUM_KAWIN') {
-                anakN = 0;
+            while(anakList.length > target) {
+                anakList.pop();
             }
+        };
+        syncAnak();
+        $watch('anakN', () => syncAnak());
+        $watch('nikah', (val) => {
+            if (val === 'BELUM_KAWIN') anakN = 0;
         });
     ">
         @csrf
@@ -91,7 +95,6 @@
         {{-- 1. INFORMASI PEKERJAAN & JABATAN --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">1. Pekerjaan, Bagian & Jabatan</h3>
-            
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Jenis Karyawan <span class="req">*</span></label>
@@ -105,9 +108,9 @@
                 <div>
                     <label class="lb">Status Karyawan <span class="req">*</span></label>
                     <select name="ket_karyawan" class="in" required>
-                        <option value="TETAP" @selected($karyawan->ket_karyawan === 'TETAP')>TETAP</option>
-                        <option value="HARIAN_LEPAS" @selected($karyawan->ket_karyawan === 'HARIAN_LEPAS' || $karyawan->ket_karyawan === 'TIDAK_TETAP')>HARIAN LEPAS</option>
-                        <option value="KONTRAK" @selected($karyawan->ket_karyawan === 'KONTRAK')>KONTRAK</option>
+                        <option value="TETAP" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'TETAP')>TETAP</option>
+                        <option value="HARIAN_LEPAS" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'HARIAN_LEPAS' || old('ket_karyawan', $karyawan->ket_karyawan) === 'TIDAK_TETAP')>HARIAN LEPAS</option>
+                        <option value="KONTRAK" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'KONTRAK')>KONTRAK</option>
                     </select>
                 </div>
             </div>
@@ -120,7 +123,7 @@
                         @foreach ($departemen as $dep)
                             <optgroup label="{{ $dep->nama_departemen }}">
                                 @foreach ($unitOrganisasi->where('departemen_id', $dep->id) as $u)
-                                    <option value="{{ $u->id }}" @selected($karyawan->unit_organisasi_id == $u->id)>
+                                    <option value="{{ $u->id }}" @selected(old('unit_organisasi_id', $karyawan->unit_organisasi_id) == $u->id)>
                                         {{ $u->nama_unit }}
                                     </option>
                                 @endforeach
@@ -155,7 +158,6 @@
                 </div>
             </div>
 
-            {{-- NAMA AYAH DAN IBU KANDUNG (MANDATORY) --}}
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-blue-50/70 p-3.5 rounded-lg border border-blue-200">
                 <div>
                     <label class="lb text-blue-900">Nama Lengkap Ayah Kandung <span class="req">*</span></label>
@@ -171,8 +173,8 @@
                 <div>
                     <label class="lb">Jenis Kelamin <span class="req">*</span></label>
                     <select name="jenis_kelamin" class="in" required>
-                        <option value="L" {{ old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L' ? 'selected' : '' }}>Laki-laki</option>
-                        <option value="P" {{ old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P' ? 'selected' : '' }}>Perempuan</option>
+                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
                     </select>
                 </div>
                 <div>
@@ -183,7 +185,7 @@
                     <label class="lb">Golongan Darah</label>
                     <select name="golongan_darah" class="in">
                         @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
-                            <option value="{{ $gVal }}" {{ old('golongan_darah', $karyawan->golongan_darah) == $gVal ? 'selected' : '' }}>{{ $gLabel }}</option>
+                            <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
                         @endforeach
                     </select>
                 </div>
@@ -216,7 +218,7 @@
             </div>
         </div>
 
-        {{-- 3. REPEATER RIWAYAT PENDIDIKAN (SD S/D TERAKHIR TANPA TAHUN) --}}
+        {{-- 3. REPEATER RIWAYAT PENDIDIKAN --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -307,21 +309,21 @@
 
             <!-- Daftar Anak Dinamis -->
             <div class="space-y-4 pt-2" x-show="nikah !== 'BELUM_KAWIN' && anakN > 0" x-cloak>
-                <template x-for="i in anakN" :key="i">
+                <template x-for="(an, index) in anakList" :key="index">
                     <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200">
-                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + i"></p>
+                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + (index + 1)"></p>
                         <div>
                             <label class="lb">Nama lengkap anak <span class="req">*</span></label>
-                            <input type="text" :name="'anak[' + i + '][nama_anak]'" x-model="anakList[i - 1] ? anakList[i - 1].nama_anak : ''" class="in uppercase" placeholder="Nama Lengkap Anak">
+                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" class="in uppercase" placeholder="Nama Lengkap Anak">
                         </div>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
                                 <label class="lb">Tanggal lahir</label>
-                                <input type="date" :name="'anak[' + i + '][tgl_lahir_anak]'" x-model="anakList[i - 1] ? anakList[i - 1].tgl_lahir_anak : ''" class="in">
+                                <input type="date" :name="'anak[' + (index + 1) + '][tgl_lahir_anak]'" x-model="an.tgl_lahir_anak" class="in">
                             </div>
                             <div>
                                 <label class="lb">Pendidikan / Status</label>
-                                <select :name="'anak[' + i + '][pendidikan_anak]'" class="in" x-model="anakList[i - 1] ? anakList[i - 1].pendidikan_anak : 'BELUM SEKOLAH'">
+                                <select :name="'anak[' + (index + 1) + '][pendidikan_anak]'" class="in" x-model="an.pendidikan_anak">
                                     @foreach ([
                                         'BELUM SEKOLAH'=>'Belum sekolah',
                                         'TK'=>'TK / PAUD',
@@ -341,7 +343,7 @@
             </div>
         </div>
 
-        {{-- 5. RIWAYAT PEKERJAAN DI SUKUN (JENJANG KARIR) --}}
+        {{-- 5. RIWAYAT PEKERJAAN DI SUKUN --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -385,7 +387,7 @@
             </template>
         </div>
 
-        {{-- 6. PENGALAMAN KERJA SEBELUM DI SUKUN (RIWAYAT LUAR) --}}
+        {{-- 6. PENGALAMAN KERJA SEBELUM --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -448,11 +450,11 @@
                 <span class="lb text-blue-900">Jika gaji belum dilakukan via transfer, apakah bersedia untuk dilakukan penggajian via transfer? <span class="req">*</span></span>
                 <div class="mt-3 flex items-center gap-6">
                     <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                        <input type="radio" name="bersedia_transfer" value="YA" {{ old('bersedia_transfer', $karyawan->bersedia_transfer) == 'YA' ? 'checked' : '' }} class="h-4 w-4 text-blue-600">
+                        <input type="radio" name="bersedia_transfer" value="YA" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) == 'YA') class="h-4 w-4 text-blue-600">
                         Iya, Bersedia
                     </label>
                     <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                        <input type="radio" name="bersedia_transfer" value="TIDAK" {{ old('bersedia_transfer', $karyawan->bersedia_transfer) == 'TIDAK' ? 'checked' : '' }} class="h-4 w-4 text-blue-600">
+                        <input type="radio" name="bersedia_transfer" value="TIDAK" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) == 'TIDAK') class="h-4 w-4 text-blue-600">
                         Tidak
                     </label>
                 </div>

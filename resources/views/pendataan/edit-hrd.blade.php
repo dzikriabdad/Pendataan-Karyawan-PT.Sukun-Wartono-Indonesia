@@ -54,11 +54,11 @@
         jabatanDipilih: '{{ old('nama_jabatan', $karyawan->nama_jabatan) }}',
         nikah: '{{ old('status_pernikahan', $karyawan->status_pernikahan) }}',
         anakN: {{ (int) old('jumlah_anak', count($anak ?? [])) }},
-        anakList: @js(array_values(old('anak', $anak->map(fn($a) => [
+        anakList: @js(array_values(old('anak', count($anak ?? []) > 0 ? $anak->map(fn($a) => [
             'nama_anak' => $a->nama_anak,
             'tgl_lahir_anak' => $a->tgl_lahir_anak,
             'pendidikan_anak' => $a->pendidikan_anak,
-        ])->toArray() ?? []))),
+        ])->toArray() : []))),
         pendList: @js(array_values(old('riwayat_pendidikan', count($pendidikan ?? []) > 0 ? $pendidikan->map(fn($p) => [
             'jenjang' => $p->jenjang,
             'nama_instansi' => $p->nama_instansi,
@@ -77,14 +77,29 @@
             'tahun_masuk' => $p->tahun_masuk,
             'tahun_keluar' => $p->tahun_keluar,
         ])->toArray() : [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']])))
-    }">
+    }"
+    x-init="
+        let syncAnak = () => {
+            let target = parseInt(anakN) || 0;
+            while(anakList.length < target) {
+                anakList.push({ nama_anak: '', tgl_lahir_anak: '', pendidikan_anak: 'BELUM SEKOLAH' });
+            }
+            while(anakList.length > target) {
+                anakList.pop();
+            }
+        };
+        syncAnak();
+        $watch('anakN', () => syncAnak());
+        $watch('nikah', (val) => {
+            if (val === 'BELUM_KAWIN') anakN = 0;
+        });
+    ">
         @csrf
         @method('PUT')
 
         {{-- 1. PEKERJAAN, BAGIAN & JABATAN --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">1. Pekerjaan, Bagian & Jabatan</h3>
-            
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Jenis Karyawan <span class="req">*</span></label>
@@ -128,7 +143,7 @@
             </div>
         </div>
 
-        {{-- 2. DATA DIRI, ORANG TUA & PENDIDIKAN (SEMUA BISA DIEDIT HRD) --}}
+        {{-- 2. DATA DIRI, ORANG TUA & PENDIDIKAN --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Data Diri, Orang Tua & Pendidikan</h3>
 
@@ -162,8 +177,8 @@
                 <div>
                     <label class="lb">Jenis Kelamin <span class="req">*</span></label>
                     <select name="jenis_kelamin" class="in" required>
-                        <option value="L" @selected($karyawan->jenis_kelamin === 'L')>Laki-laki</option>
-                        <option value="P" @selected($karyawan->jenis_kelamin === 'P')>Perempuan</option>
+                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'P')>Perempuan</option>
                     </select>
                 </div>
                 <div>
@@ -174,7 +189,7 @@
                     <label class="lb">Golongan Darah</label>
                     <select name="golongan_darah" class="in">
                         @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gV => $gL)
-                            <option value="{{ $gV }}" @selected($karyawan->golongan_darah === $gV)>{{ $gL }}</option>
+                            <option value="{{ $gV }}" @selected(old('golongan_darah', $karyawan->golongan_darah) === $gV)>{{ $gL }}</option>
                         @endforeach
                     </select>
                 </div>
@@ -214,7 +229,7 @@
             </div>
         </div>
 
-        {{-- 3. REPEATER RIWAYAT PENDIDIKAN (SD S/D TERAKHIR TANPA TAHUN) --}}
+        {{-- 3. REPEATER RIWAYAT PENDIDIKAN --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -282,8 +297,8 @@
                 <div>
                     <label class="lb">Kesediaan Transfer Gaji</label>
                     <select name="bersedia_transfer" class="in">
-                        <option value="YA" @selected($karyawan->bersedia_transfer === 'YA')>Iya, Bersedia</option>
-                        <option value="TIDAK" @selected($karyawan->bersedia_transfer === 'TIDAK')>Tidak</option>
+                        <option value="YA" @selected(old('bersedia_transfer', $karyawan->bersedia_transfer) === 'YA')>Iya, Bersedia</option>
+                        <option value="TIDAK" @selected(old('bersedia_transfer', $karyawan->bersedia_transfer) === 'TIDAK')>Tidak</option>
                     </select>
                 </div>
             </div>
@@ -304,7 +319,7 @@
             </div>
         </div>
 
-        {{-- 5. RIWAYAT PEKERJAAN DI SUKUN (JENJANG KARIR) --}}
+        {{-- 5. RIWAYAT PEKERJAAN DI SUKUN --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -346,7 +361,7 @@
             </template>
         </div>
 
-        {{-- 6. PENGALAMAN KERJA SEBELUM DI SUKUN --}}
+        {{-- 6. PENGALAMAN KERJA SEBELUM --}}
         <div class="cd space-y-4">
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
@@ -425,21 +440,21 @@
             </div>
 
             <div class="space-y-4 pt-2" x-show="nikah !== 'BELUM_KAWIN' && anakN > 0">
-                <template x-for="i in anakN" :key="i">
+                <template x-for="(an, index) in anakList" :key="index">
                     <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200">
-                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + i"></p>
+                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + (index + 1)"></p>
                         <div>
                             <label class="lb">Nama Lengkap Anak</label>
-                            <input type="text" :name="'anak[' + i + '][nama_anak]'" x-model="anakList[i - 1] ? anakList[i - 1].nama_anak : ''" class="in uppercase" placeholder="Nama Lengkap Anak">
+                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" class="in uppercase" placeholder="Nama Lengkap Anak">
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="lb">Tanggal Lahir</label>
-                                <input type="date" :name="'anak[' + i + '][tgl_lahir_anak]'" x-model="anakList[i - 1] ? anakList[i - 1].tgl_lahir_anak : ''" class="in">
+                                <input type="date" :name="'anak[' + (index + 1) + '][tgl_lahir_anak]'" x-model="an.tgl_lahir_anak" class="in">
                             </div>
                             <div>
                                 <label class="lb">Pendidikan</label>
-                                <select :name="'anak[' + i + '][pendidikan_anak]'" class="in" x-model="anakList[i - 1] ? anakList[i - 1].pendidikan_anak : 'BELUM SEKOLAH'">
+                                <select :name="'anak[' + (index + 1) + '][pendidikan_anak]'" class="in" x-model="an.pendidikan_anak">
                                     @foreach (['BELUM SEKOLAH'=>'Belum sekolah','TK'=>'TK / PAUD','SD'=>'SD','SMP'=>'SMP','SMA/SMK'=>'SMA / SMK','KULIAH'=>'Kuliah','BEKERJA'=>'Sudah bekerja'] as $v => $t)
                                         <option value="{{ $v }}">{{ $t }}</option>
                                     @endforeach
