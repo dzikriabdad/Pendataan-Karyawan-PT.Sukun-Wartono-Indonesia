@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
+        [x-cloak]{display:none!important}
         body{background:#eef2f8}
         .cd{background:#fff;border-radius:.75rem;border:1px solid #e2e8f0;padding:1.5rem;box-shadow:0 1px 3px rgba(10,42,94,.06)}
         .lb{font-size:.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.025em}
@@ -94,12 +95,13 @@
                 <span class="lb">Jenis Kelamin</span>
                 <p class="val">{{ $karyawan->jenis_kelamin === 'L' ? 'Laki-laki' : 'Perempuan' }}</p>
             </div>
-           <div>
+            <div>
                 <span class="lb">Tempat, Tanggal Lahir</span>
                 <p class="val uppercase">
                     {{ ($karyawan->tempat_lahir ? $karyawan->tempat_lahir . ', ' : '') . ($karyawan->tgl_lahir ? date('d-m-Y', strtotime($karyawan->tgl_lahir)) : '-') }}
                 </p>
             </div>
+            <div>
                 <span class="lb">Golongan Darah</span>
                 <p class="val">{{ $karyawan->golongan_darah ?: '-' }}</p>
             </div>
