@@ -236,21 +236,34 @@ foreach ($errors->keys() as $k) {
                 </div>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
-                <div>
-                    <label for="tgl_lahir" class="lb">Tanggal lahir <span class="req">*</span></label>
-                    <input id="tgl_lahir" type="date" name="tgl_lahir" x-model="tglLahir" class="in">
-                </div>
-                <div>
-                    <label for="golongan_darah" class="lb">Golongan darah</label>
-                    <select id="golongan_darah" name="golongan_darah" x-model="golDarah" class="in">
-                        <option value="-">Tidak diketahui</option>
-                        @foreach (['A','B','AB','O'] as $g)
-                            <option value="{{ $g }}">{{ $g }}</option>
-                        @endforeach
-                    </select>
-                </div>
-            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+    <div>
+        <label class="lb">Jenis Kelamin <span class="req">*</span></label>
+        <select name="jenis_kelamin" class="in" required>
+            <option value="">-- Pilih --</option>
+            <option value="L" @selected(old('jenis_kelamin') === 'L')>Laki-laki</option>
+            <option value="P" @selected(old('jenis_kelamin') === 'P')>Perempuan</option>
+        </select>
+    </div>
+    <div>
+        <label class="lb">Tempat Lahir <span class="req">*</span></label>
+        <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir') }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
+    </div>
+    <div>
+        <label class="lb">Tanggal Lahir <span class="req">*</span></label>
+        <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir') }}" class="in" required>
+    </div>
+    <div>
+        <label class="lb">Golongan Darah</label>
+        <select name="golongan_darah" class="in">
+            <option value="-">Tidak diketahui</option>
+            <option value="A" @selected(old('golongan_darah') === 'A')>A</option>
+            <option value="B" @selected(old('golongan_darah') === 'B')>B</option>
+            <option value="AB" @selected(old('golongan_darah') === 'AB')>AB</option>
+            <option value="O" @selected(old('golongan_darah') === 'O')>O</option>
+        </select>
+    </div>
+</div>
 
             {{-- REPEATER RIWAYAT PENDIDIKAN DARI SD S/D TERAKHIR --}}
             <div class="sb space-y-4">
@@ -586,12 +599,12 @@ foreach ($errors->keys() as $k) {
                 <div>
                     <label for="no_bpjs_kesehatan" class="lb">No. BPJS Kesehatan</label>
                     <input id="no_bpjs_kesehatan" type="text" name="no_bpjs_kesehatan"
-                           inputmode="numeric" x-model="bpjsKes" placeholder="Nomor kartu" class="in">
+                            x-model="bpjsKes" placeholder="Nomor kartu" class="in">
                 </div>
                 <div>
                     <label for="no_bpjs_ketenagakerjaan" class="lb">No. BPJS Ketenagakerjaan</label>
                     <input id="no_bpjs_ketenagakerjaan" type="text" name="no_bpjs_ketenagakerjaan"
-                           inputmode="numeric" x-model="bpjsKet" placeholder="Nomor BPJS Ketenagakerjaan" class="in">
+                           x-model="bpjsKet" placeholder="Nomor BPJS Ketenagakerjaan" class="in">
                 </div>
             </div>
 

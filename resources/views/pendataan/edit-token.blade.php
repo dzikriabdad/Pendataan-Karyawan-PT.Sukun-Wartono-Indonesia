@@ -169,27 +169,31 @@
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                    <label class="lb">Jenis Kelamin <span class="req">*</span></label>
-                    <select name="jenis_kelamin" class="in" required>
-                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
-                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-                    <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
-                </div>
-                <div>
-                    <label class="lb">Golongan Darah</label>
-                    <select name="golongan_darah" class="in">
-                        @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
-                            <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
-                        @endforeach
-                    </select>
-                </div>
-            </div>
+           <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+    <div>
+        <label class="lb">Jenis Kelamin <span class="req">*</span></label>
+        <select name="jenis_kelamin" class="in" required>
+            <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
+            <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
+        </select>
+    </div>
+    <div>
+        <label class="lb">Tempat Lahir <span class="req">*</span></label>
+        <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir', $karyawan->tempat_lahir) }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
+    </div>
+    <div>
+        <label class="lb">Tanggal Lahir <span class="req">*</span></label>
+        <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
+    </div>
+    <div>
+        <label class="lb">Golongan Darah</label>
+        <select name="golongan_darah" class="in">
+            @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
+                <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
+            @endforeach
+        </select>
+    </div>
+</div>
 
             <div>
                 <label class="lb">Disabilitas Jika ada Tulis, Jenis Disabilitasnya</label>

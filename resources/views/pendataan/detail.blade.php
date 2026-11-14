@@ -94,11 +94,12 @@
                 <span class="lb">Jenis Kelamin</span>
                 <p class="val">{{ $karyawan->jenis_kelamin === 'L' ? 'Laki-laki' : 'Perempuan' }}</p>
             </div>
-            <div>
-                <span class="lb">Tanggal Lahir</span>
-                <p class="val">{{ $karyawan->tgl_lahir ? date('d-m-Y', strtotime($karyawan->tgl_lahir)) : '-' }}</p>
+           <div>
+                <span class="lb">Tempat, Tanggal Lahir</span>
+                <p class="val uppercase">
+                    {{ ($karyawan->tempat_lahir ? $karyawan->tempat_lahir . ', ' : '') . ($karyawan->tgl_lahir ? date('d-m-Y', strtotime($karyawan->tgl_lahir)) : '-') }}
+                </p>
             </div>
-            <div>
                 <span class="lb">Golongan Darah</span>
                 <p class="val">{{ $karyawan->golongan_darah ?: '-' }}</p>
             </div>

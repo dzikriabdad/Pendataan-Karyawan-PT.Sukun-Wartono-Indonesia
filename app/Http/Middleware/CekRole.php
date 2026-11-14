@@ -13,7 +13,12 @@ class CekRole
         Closure $next,
         ...$roles
     ): Response {
-        $role = session('pengguna_role');
+        $role = strtoupper((string) session('pengguna_role'));
+
+        // Normalisasi role lama jika diperlukan (misal adminhr dianggap ADMIN_HR)
+        if ($role === 'ADMINHR' || $role === 'ADMIN_HR') {
+            $roles = array_merge($roles, ['ADMINHR', 'ADMIN_HR']);
+        }
 
         if (! in_array($role, $roles, true)) {
             abort(403, 'Anda tidak memiliki hak akses ke halaman ini.');

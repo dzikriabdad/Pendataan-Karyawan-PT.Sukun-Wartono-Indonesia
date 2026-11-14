@@ -33,8 +33,8 @@ Route::post('/logout', [
     'logout',
 ])->name('logout');
 
-// Route khusus Dashboard & Aksi Admin HR / Superadmin (Termasuk Detail Karyawan & Edit HRD)
-Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR'])->group(function () {
+// Route khusus Dashboard & Aksi Admin HR / HRD Pusat / Superadmin (Termasuk Hapus, Detail, & Edit HRD)
+Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR,HRDPUSAT'])->group(function () {
     Route::get('/hrd/dashboard', [
         PendataanController::class,
         'dashboard',
@@ -54,6 +54,12 @@ Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR'])->group(function
         PendataanController::class,
         'updateHrd',
     ])->name('hrd.karyawan.update');
+
+    // Route untuk hapus data karyawan (bisa diakses oleh HRDPUSAT dan SUPERADMIN)
+    Route::delete('/hrd/karyawan/{id}', [
+        PendataanController::class,
+        'destroy',
+    ])->name('pendataan.destroy');
 });
 
 // Route khusus Dashboard Atasan / Kepala Bagian (Tanpa akses ke detail karyawan)
@@ -74,6 +80,3 @@ Route::put('/pendataan/update/{token}', [
     PendataanController::class,
     'updateByToken',
 ])->name('pendataan.update.token');
-
-
-

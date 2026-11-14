@@ -45,7 +45,8 @@ class AuthController extends Controller
             'pengguna_role' => $pengguna->role,
         ]);
 
-        if (in_array($pengguna->role, ['SUPERADMIN', 'ADMIN_HR'], true)) {
+        // Tambahkan 'HRDPUSAT' di sini agar diarahkan ke dashboard HRD & lolos middleware
+        if (in_array($pengguna->role, ['SUPERADMIN', 'ADMIN_HR', 'HRDPUSAT'], true)) {
             return redirect()->route('hrd.dashboard');
         }
 
@@ -61,4 +62,4 @@ class AuthController extends Controller
             ->route('login')
             ->with('sukses', 'Anda sudah logout.');
     }
-}
+}   

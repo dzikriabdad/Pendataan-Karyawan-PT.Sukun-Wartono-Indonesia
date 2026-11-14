@@ -59,19 +59,27 @@
     <div class="mb-6 flex flex-col md:flex-row gap-4 md:items-end justify-between rounded-xl bg-white p-5 shadow">
         
         <!-- Counter -->
-        <div>
-            <p class="text-sm text-slate-500">Jumlah data ditemukan</p>
-            <p class="mt-1 text-3xl font-bold text-blue-800">
-                {{ $totalData ?? 0 }}
-            </p>
-            @if(request('search') || request('departemen'))
-                <p class="text-xs text-blue-600 mt-1 font-medium">
-                    🔍 Filter aktif: 
-                    @if(request('search')) [Pencarian: "{{ request('search') }}"] @endif
-                    @if(request('departemen')) [Departemen: "{{ request('departemen') }}"] @endif
-                </p>
+       <div>
+         <p class="text-sm text-slate-500">Jumlah data ditemukan</p>
+        <p class="mt-1 text-3xl font-bold text-blue-800">
+        {{ $totalData ?? 0 }}
+        </p>
+    @if(request('search') || request('departemen'))
+        <div class="flex flex-wrap items-center gap-1.5 mt-2 text-sm text-blue-700 font-medium">
+            <span>🔍 Filter aktif:</span>
+            @if(request('search'))
+                <span class="bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                    Pencarian: "{{ request('search') }}"
+                </span>
+            @endif
+            @if(request('departemen'))
+                <span class="bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                    Departemen: "{{ request('departemen') }}"
+                </span>
             @endif
         </div>
+    @endif
+</div>
 
         <!-- Form Filter -->
         <form method="GET" action="{{ url()->current() }}" class="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
@@ -108,6 +116,9 @@
                     <button type="submit" name="export" value="csv" class="rounded-lg bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 transition">
                         Unduh CSV
                     </button>
+                    <a href="{{ request()->fullUrlWithQuery(['export' => 'excel']) }}" class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 transition">
+                        Export Excel
+                    </a>
                 @endif
             </div>
         </form>
@@ -132,6 +143,11 @@
 
                         {{-- Kolom Status Data --}}
                         <th class="px-4 py-3">Status Data</th>
+
+                        {{-- Kolom Aksi Hapus khusus HRDPUSAT / canDelete --}}
+                        @if(!empty($canDelete))
+                            <th class="px-4 py-3 text-center">Aksi</th>
+                        @endif
                     </tr>
                 </thead>
 
@@ -170,10 +186,29 @@
                                     <span class="text-amber-600 font-semibold">Belum Lengkap</span>
                                 @endif
                             </td>
+
+                            {{-- Tombol Hapus khusus HRDPUSAT --}}
+                            @if(!empty($canDelete))
+                                <td class="px-4 py-3 text-center">
+                                    <form action="{{ route('pendataan.destroy', $item->id) }}" method="POST" class="inline"
+                                          onsubmit="return confirm('Yakin ingin menghapus permanen data {{ $item->nama_lengkap }} (NIK: {{ $item->nik_ktp }})?')">
+                                        @csrf
+                                        @method('DELETE')
+                                        <button type="submit" class="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 transition shadow-sm">
+                                            Hapus
+                                        </button>
+                                    </form>
+                                </td>
+                            @endif
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="{{ (isset($mode) && $mode === 'HRD') ? '7' : '6' }}" class="px-4 py-8 text-center text-slate-500">
+                            @php
+                                $colSpan = 6;
+                                if(isset($mode) && $mode === 'HRD') $colSpan++;
+                                if(!empty($canDelete)) $colSpan++;
+                            @endphp
+                            <td colspan="{{ $colSpan }}" class="px-4 py-8 text-center text-slate-500">
                                 Belum ada data karyawan atau data tidak ditemukan.
                             </td>
                         </tr>
