@@ -108,6 +108,7 @@ foreach ($errors->keys() as $k) {
         nip: @js(old('nip', '')),
         nama: @js(old('nama_lengkap', '')),
         jk: @js(old('jenis_kelamin', '')),
+        tempatLahir: @js(old('tempat_lahir', '')),
         tglLahir: @js(old('tgl_lahir', '')),
         golDarah: @js(old('golongan_darah', '-')),
         riwayatPendidikan: @js(array_values(old('riwayat_pendidikan', [['jenjang' => 'SD', 'nama_instansi' => '', 'jurusan' => '', 'nilai_ipk' => '']]))),
@@ -236,31 +237,23 @@ foreach ($errors->keys() as $k) {
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                <div>
-                    <label class="lb">Jenis Kelamin <span class="req">*</span></label>
-                    <select name="jenis_kelamin" class="in" required>
-                        <option value="">-- Pilih --</option>
-                        <option value="L" @selected(old('jenis_kelamin') === 'L')>Laki-laki</option>
-                        <option value="P" @selected(old('jenis_kelamin') === 'P')>Perempuan</option>
-                    </select>
-                </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                     <label class="lb">Tempat Lahir <span class="req">*</span></label>
-                    <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir') }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
+                    <input type="text" name="tempat_lahir" x-model="tempatLahir" class="in uppercase" placeholder="Contoh: KUDUS" required>
                 </div>
                 <div>
                     <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-                    <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir') }}" class="in" required>
+                    <input type="date" name="tgl_lahir" x-model="tglLahir" class="in" required>
                 </div>
                 <div>
                     <label class="lb">Golongan Darah</label>
-                    <select name="golongan_darah" class="in">
+                    <select name="golongan_darah" x-model="golDarah" class="in">
                         <option value="-">Tidak diketahui</option>
-                        <option value="A" @selected(old('golongan_darah') === 'A')>A</option>
-                        <option value="B" @selected(old('golongan_darah') === 'B')>B</option>
-                        <option value="AB" @selected(old('golongan_darah') === 'AB')>AB</option>
-                        <option value="O" @selected(old('golongan_darah') === 'O')>O</option>
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                        <option value="AB">AB</option>
+                        <option value="O">O</option>
                     </select>
                 </div>
             </div>
@@ -985,7 +978,7 @@ function formKaryawan(initialData) {
         },
 
         saveDraft() {
-            const keys = ['step', 'nik', 'nip', 'nama', 'jk', 'tglLahir', 'golDarah', 'riwayatPendidikan', 'wa', 'emailForm', 'disabilitas', 'npwp', 'alamatKtp', 'alamatSama', 'alamatDom', 'tipe', 'statusKerjaan', 'unitId', 'unitNama', 'jabatanDipilih', 'distribusiJabatan', 'rmRegional', 'amWilayah', 'borongId', 'kotaId', 'areaId', 'rek', 'bersediaTransfer', 'bpjsKes', 'bpjsKet', 'kop', 'ayahNama', 'ibuNama', 'nikah', 'pasanganNama', 'kerjaPasangan', 'anakN', 'anakList', 'riwayatLuar', 'riwayatSukun', 'masukTgl', 'masukBulan', 'masukTahun'];
+            const keys = ['step', 'nik', 'nip', 'nama', 'jk', 'tempatLahir', 'tglLahir', 'golDarah', 'riwayatPendidikan', 'wa', 'emailForm', 'disabilitas', 'npwp', 'alamatKtp', 'alamatSama', 'alamatDom', 'tipe', 'statusKerjaan', 'unitId', 'unitNama', 'jabatanDipilih', 'distribusiJabatan', 'rmRegional', 'amWilayah', 'borongId', 'kotaId', 'areaId', 'rek', 'bersediaTransfer', 'bpjsKes', 'bpjsKet', 'kop', 'ayahNama', 'ibuNama', 'nikah', 'pasanganNama', 'kerjaPasangan', 'anakN', 'anakList', 'riwayatLuar', 'riwayatSukun', 'masukTgl', 'masukBulan', 'masukTahun'];
             const data = {};
             keys.forEach((key) => { data[key] = this[key]; });
             try {
@@ -1023,6 +1016,7 @@ function formKaryawan(initialData) {
                 if (String(this.nik || '').replace(/\D/g, '').length !== 16) errors.nik = 'Nomor KTP wajib 16 angka.';
                 if (!String(this.nama || '').trim()) errors.nama = 'Nama lengkap wajib diisi.';
                 if (!this.jk) errors.jk = 'Pilih jenis kelamin.';
+                if (!String(this.tempatLahir || '').trim()) errors.tempatLahir = 'Tempat lahir wajib diisi.';
                 if (!this.tglLahir) errors.tgl = 'Tanggal lahir wajib diisi.';
                 if (!String(this.alamatKtp || '').trim()) errors.alamat = 'Alamat sesuai KTP wajib diisi.';
 
