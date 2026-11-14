@@ -237,40 +237,40 @@ foreach ($errors->keys() as $k) {
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-    <div>
-        <label class="lb">Jenis Kelamin <span class="req">*</span></label>
-        <select name="jenis_kelamin" class="in" required>
-            <option value="">-- Pilih --</option>
-            <option value="L" @selected(old('jenis_kelamin') === 'L')>Laki-laki</option>
-            <option value="P" @selected(old('jenis_kelamin') === 'P')>Perempuan</option>
-        </select>
-    </div>
-    <div>
-        <label class="lb">Tempat Lahir <span class="req">*</span></label>
-        <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir') }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
-    </div>
-    <div>
-        <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-        <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir') }}" class="in" required>
-    </div>
-    <div>
-        <label class="lb">Golongan Darah</label>
-        <select name="golongan_darah" class="in">
-            <option value="-">Tidak diketahui</option>
-            <option value="A" @selected(old('golongan_darah') === 'A')>A</option>
-            <option value="B" @selected(old('golongan_darah') === 'B')>B</option>
-            <option value="AB" @selected(old('golongan_darah') === 'AB')>AB</option>
-            <option value="O" @selected(old('golongan_darah') === 'O')>O</option>
-        </select>
-    </div>
-</div>
+                <div>
+                    <label class="lb">Jenis Kelamin <span class="req">*</span></label>
+                    <select name="jenis_kelamin" class="in" required>
+                        <option value="">-- Pilih --</option>
+                        <option value="L" @selected(old('jenis_kelamin') === 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin') === 'P')>Perempuan</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="lb">Tempat Lahir <span class="req">*</span></label>
+                    <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir') }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
+                </div>
+                <div>
+                    <label class="lb">Tanggal Lahir <span class="req">*</span></label>
+                    <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir') }}" class="in" required>
+                </div>
+                <div>
+                    <label class="lb">Golongan Darah</label>
+                    <select name="golongan_darah" class="in">
+                        <option value="-">Tidak diketahui</option>
+                        <option value="A" @selected(old('golongan_darah') === 'A')>A</option>
+                        <option value="B" @selected(old('golongan_darah') === 'B')>B</option>
+                        <option value="AB" @selected(old('golongan_darah') === 'AB')>AB</option>
+                        <option value="O" @selected(old('golongan_darah') === 'O')>O</option>
+                    </select>
+                </div>
+            </div>
 
             {{-- REPEATER RIWAYAT PENDIDIKAN DARI SD S/D TERAKHIR --}}
             <div class="sb space-y-4">
                 <div class="flex items-center justify-between border-b border-blue-200 pb-2">
                     <div>
                         <span class="lb text-blue-900 font-bold">Riwayat Pendidikan (SD s/d Terakhir) <span class="req">*</span></span>
-                        <p class="hint mt-0.5">Isi riwayat pendidikan Anda dari SD hingga pendidikan terakhir.</p>
+                        <p class="hint mt-0.5">Isi riwayat pendidikan Anda dari SD hingga pendidikan terakhir, atau pilih Tidak Sekolah.</p>
                     </div>
                     <button type="button" @click="riwayatPendidikan.push({ jenjang: '', nama_instansi: '', jurusan: '', nilai_ipk: '' })" class="rounded-md bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-200">
                         + Tambah Pendidikan
@@ -288,8 +288,9 @@ foreach ($errors->keys() as $k) {
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
                                 <label class="lb">Jenjang Pendidikan <span class="req">*</span></label>
-                                <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" class="in">
+                                <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" @change="onJenjangChange(rp)" class="in">
                                     <option value="">-- Pilih Jenjang --</option>
+                                    <option value="TIDAK SEKOLAH">Tidak Sekolah</option>
                                     <option value="SD">SD</option>
                                     <option value="SMP">SMP / MTs</option>
                                     <option value="SMA/SMK">SMA / SMK / MA</option>
@@ -304,17 +305,32 @@ foreach ($errors->keys() as $k) {
                             </div>
                             <div>
                                 <label class="lb">Nama Sekolah / Instansi / Universitas <span class="req">*</span></label>
-                                <input type="text" :name="'riwayat_pendidikan[' + index + '][nama_instansi]'" x-model="rp.nama_instansi" class="in uppercase" placeholder="Contoh: SDN 1 Kudus / Undip">
+                                <input type="text"
+                                       :name="'riwayat_pendidikan[' + index + '][nama_instansi]'"
+                                       x-model="rp.nama_instansi"
+                                       :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                       :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in uppercase bg-slate-100 text-slate-500 cursor-not-allowed' : 'in uppercase'"
+                                       placeholder="Contoh: SDN 1 Kudus / Undip">
                             </div>
                         </div>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
                                 <label class="lb">Jurusan / Program Studi</label>
-                                <input type="text" :name="'riwayat_pendidikan[' + index + '][jurusan]'" x-model="rp.jurusan" class="in uppercase" placeholder="Contoh: IPA / Teknik Mesin (Kosongkan jika SD/SMP)">
+                                <input type="text"
+                                       :name="'riwayat_pendidikan[' + index + '][jurusan]'"
+                                       x-model="rp.jurusan"
+                                       :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                       :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in uppercase bg-slate-100 text-slate-500 cursor-not-allowed' : 'in uppercase'"
+                                       placeholder="Contoh: IPA / Teknik Mesin (Kosongkan jika SD/SMP)">
                             </div>
                             <div>
                                 <label class="lb">Nilai Akhir / IPK</label>
-                                <input type="text" :name="'riwayat_pendidikan[' + index + '][nilai_ipk]'" x-model="rp.nilai_ipk" class="in" placeholder="Contoh: 85.00 / 3.50">
+                                <input type="text"
+                                       :name="'riwayat_pendidikan[' + index + '][nilai_ipk]'"
+                                       x-model="rp.nilai_ipk"
+                                       :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                       :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in bg-slate-100 text-slate-500 cursor-not-allowed' : 'in'"
+                                       placeholder="Contoh: 85.00 / 3.50">
                             </div>
                         </div>
                     </div>
@@ -923,6 +939,16 @@ function formKaryawan(initialData) {
             });
         },
 
+        onJenjangChange(rp) {
+            if (rp.jenjang === 'TIDAK SEKOLAH') {
+                rp.nama_instansi = 'TIDAK SEKOLAH';
+                rp.jurusan = '';
+                rp.nilai_ipk = '';
+            } else if (rp.nama_instansi === 'TIDAK SEKOLAH') {
+                rp.nama_instansi = '';
+            }
+        },
+
         normalisasiArray() {
             if (!Array.isArray(this.anakList)) this.anakList = Object.values(this.anakList || {});
             if (!Array.isArray(this.riwayatPendidikan)) this.riwayatPendidikan = Object.values(this.riwayatPendidikan || {});
@@ -932,6 +958,13 @@ function formKaryawan(initialData) {
             if (this.riwayatPendidikan.length === 0) {
                 this.riwayatPendidikan = [{ jenjang: 'SD', nama_instansi: '', jurusan: '', nilai_ipk: '' }];
             }
+            this.riwayatPendidikan.forEach((rp) => {
+                if (rp.jenjang === 'TIDAK SEKOLAH') {
+                    rp.nama_instansi = 'TIDAK SEKOLAH';
+                    rp.jurusan = '';
+                    rp.nilai_ipk = '';
+                }
+            });
             if (this.riwayatLuar.length === 0) {
                 this.riwayatLuar = [{ perusahaan: '', jabatan: '', tahun_masuk: '', tahun_keluar: '' }];
             }
