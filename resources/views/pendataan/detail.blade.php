@@ -12,6 +12,7 @@
         .cd{background:#fff;border-radius:.75rem;border:1px solid #e2e8f0;padding:1.5rem;box-shadow:0 1px 3px rgba(10,42,94,.06)}
         .lb{font-size:.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.025em}
         .val{font-size:.925rem;font-weight:600;color:#1e293b;margin-top:.15rem}
+        .val{font-size:.925rem;font-weight:600;color:#1e293b;margin-top:.15rem;overflow-wrap:break-word}
     </style>
 </head>
 
@@ -118,7 +119,7 @@
             </div>
             <div>
                 <span class="lb">Email</span>
-                <p class="val">{{ $karyawan->email ?: '-' }}</p>
+                <p class="val break-all">{{ $karyawan->email ?: '-' }}</p>
             </div>
             <div>
                 <span class="lb">NPWP</span>

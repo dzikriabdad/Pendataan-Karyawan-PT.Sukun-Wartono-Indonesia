@@ -101,8 +101,9 @@ foreach ($errors->keys() as $k) {
         step: {{ $step }},
         isError: {{ $errors->any() ? 'true' : 'false' }},
         isSukses: {{ session('sukses') ? 'true' : 'false' }},
+        isSubmitting: false,
         errs: {},
-        
+
         {{-- Langkah 1 --}}
         nik: @js(old('nik_ktp', '')),
         nip: @js(old('nip', '')),
@@ -146,7 +147,7 @@ foreach ($errors->keys() as $k) {
         kerjaPasangan: @js(old('pekerjaan_pasangan', '')),
         anakN: {{ old('status_pernikahan') === 'BELUM_KAWIN' ? 0 : (int) old('jumlah_anak', 0) }},
         anakList: @js(array_values(old('anak', []))),
-        
+
         {{-- Langkah 4 --}}
         riwayatLuar: @js(array_values(old('riwayat_luar', [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']]))),
         riwayatSukun: @js(array_values(old('riwayat_sukun', [['bagian' => '', 'jabatan' => '', 'tahun_mulai' => '', 'tahun_selesai' => '']]))),
@@ -209,7 +210,10 @@ foreach ($errors->keys() as $k) {
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label for="nik_ktp" class="lb">Nomor KTP / NIK (16 angka) <span class="req">*</span></label>
-                    <input id="nik_ktp" type="text" name="nik_ktp" x-model="nik" maxlength="16" inputmode="numeric" placeholder="16 angka" class="in tracking-wide">
+                    <input id="nik_ktp" type="text" name="nik_ktp"
+                           x-model="nik"
+                           @input="nik = nik.replace(/\D/g, '').slice(0, 16)"
+                           maxlength="16" inputmode="numeric" placeholder="16 angka" class="in tracking-wide">
                     <p class="hint" :class="nik.length === 16 ? 'text-emerald-700' : ''"><span x-text="nik.length"></span>/16 angka terisi</p>
                 </div>
                 <div>
@@ -239,12 +243,12 @@ foreach ($errors->keys() as $k) {
 
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                    <label class="lb">Tempat Lahir <span class="req">*</span></label>
-                    <input type="text" name="tempat_lahir" x-model="tempatLahir" class="in uppercase" placeholder="Contoh: KUDUS" required>
+                    <label class="lb">Tempat Lahir</label>
+                    <input type="text" name="tempat_lahir" x-model="tempatLahir" class="in uppercase" placeholder="Contoh: KUDUS">
                 </div>
                 <div>
                     <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-                    <input type="date" name="tgl_lahir" x-model="tglLahir" class="in" required>
+                    <input type="date" name="tgl_lahir" x-model="tglLahir" class="in">
                 </div>
                 <div>
                     <label class="lb">Golongan Darah</label>
@@ -341,7 +345,7 @@ foreach ($errors->keys() as $k) {
                 </div>
             </div>
 
-           <div class="grid gap-4 sm:grid-cols-2 items-end">
+            <div class="grid gap-4 sm:grid-cols-2 items-end">
                 <div>
                     <label for="disabilitas" class="lb">Disabilitas Jika ada Tulis, Jenis Disabilitasnya</label>
                     <input id="disabilitas" type="text" name="disabilitas" x-model="disabilitas" placeholder="Kosongkan jika normal" class="in">
@@ -379,7 +383,7 @@ foreach ($errors->keys() as $k) {
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label for="tipe_karyawan" class="lb">Jenis karyawan <span class="req">*</span></label>
-                    <select id="tipe_karyawan" name="tipe_karyawan" x-model="tipe" class="in" 
+                    <select id="tipe_karyawan" name="tipe_karyawan" x-model="tipe" class="in"
                             @change="jabatanDipilih = ''; distribusiJabatan = ''; rmRegional = ''; amWilayah = ''; if (tipe === 'DISTRIBUSI') { unitId = ''; }">
                         <option value="BULANAN">Bulanan</option>
                         <option value="HARIAN">Harian</option>
@@ -402,13 +406,13 @@ foreach ($errors->keys() as $k) {
                 <div>
                     <label for="unit_organisasi_id" class="lb">Bagian / unit kerja <span class="req">*</span></label>
                     <p class="hint mb-1 mt-0">Dikelompokkan per departemen sesuai struktur perusahaan terbaru.</p>
-                    
+
                     <select id="unit_organisasi_id" name="unit_organisasi_id" x-model="unitId"
                             :disabled="tipe === 'DISTRIBUSI'"
                             @change="const o = $event.target.selectedOptions[0]; unitNama = (o ? o.text.trim() : ''); jabatanDipilih = ''"
                             class="in mt-0">
                         <option value="">Pilih bagian / unit kerja</option>
-                        
+
                         @if(count($departemen) === 0)
                             <option value="" disabled>⚠️ TABEL DEPARTEMEN DI DATABASE MASIH KOSONG!</option>
                         @else
@@ -420,7 +424,7 @@ foreach ($errors->keys() as $k) {
                                             $isPerwakilan = str_starts_with($namaUnitUp, 'PERWAKILAN') || str_contains($namaUnitUp, 'PERWAKILAN');
                                             $isRegional = str_starts_with($namaUnitUp, 'REGIONAL') || str_contains($namaUnitUp, 'REGIONAL');
                                         @endphp
-                                        
+
                                         @if (strtoupper($dep->nama_departemen) === 'DISTRIBUSI' && ($isPerwakilan || $isRegional))
                                             @continue
                                         @endif
@@ -467,7 +471,7 @@ foreach ($errors->keys() as $k) {
                 <select id="jabatan_borong_id" name="jabatan_borong_id" x-model="borongId" class="in" :disabled="tipe !== 'BORONG'">
                     <option value="">Pilih pekerjaan borong</option>
                     @if(count($jabatanBorong) === 0)
-                         <option value="" disabled>⚠️ TABEL JABATAN BORONG MASIH KOSONG!</option>
+                        <option value="" disabled>⚠️ TABEL JABATAN BORONG MASIH KOSONG!</option>
                     @else
                         @foreach ($jabatanBorong as $jb)
                             <option value="{{ $jb->id }}">{{ $jb->nama_jabatan_borong }}</option>
@@ -580,7 +584,9 @@ foreach ($errors->keys() as $k) {
                     <label for="no_rekening" class="lb">
                         Nomor rekening (BRI 15 angka / BNI 9-10 angka)
                     </label>
-                    <input id="no_rekening" type="text" name="no_rekening" x-model="rek"
+                    <input id="no_rekening" type="text" name="no_rekening"
+                           x-model="rek"
+                           @input="rek = rek.replace(/\D/g, '').slice(0, 15)"
                            maxlength="15" inputmode="numeric"
                            pattern="^(\d{9,10}|\d{15})?$"
                            title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)"
@@ -608,7 +614,7 @@ foreach ($errors->keys() as $k) {
                 <div>
                     <label for="no_bpjs_kesehatan" class="lb">No. BPJS Kesehatan</label>
                     <input id="no_bpjs_kesehatan" type="text" name="no_bpjs_kesehatan"
-                            x-model="bpjsKes" placeholder="Nomor kartu" class="in">
+                           x-model="bpjsKes" placeholder="Nomor kartu" class="in">
                 </div>
                 <div>
                     <label for="no_bpjs_ketenagakerjaan" class="lb">No. BPJS Ketenagakerjaan</label>
@@ -630,7 +636,7 @@ foreach ($errors->keys() as $k) {
         <section x-show="step === 3" x-cloak class="cd space-y-5">
             <div>
                 <h2 class="text-base font-semibold text-slate-900">Keluarga dan Orang Tua</h2>
-                <p class="mt-0.5 text-sm text-slate-500">Lengkapi data orang tua kandung, data pasangan, dan anak sesuai kartu keluarga.</p>
+                <p class="mt-0.5 text-sm text-slate-500">Lengkapi data orang tua kandung, data pasangan (jika sudah menikah), dan anak sesuai kartu keluarga.</p>
             </div>
             <div class="al" x-show="ada(3)" x-cloak x-text="pesan(3)"></div>
 
@@ -638,11 +644,11 @@ foreach ($errors->keys() as $k) {
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label for="nama_ayah" class="lb">Nama lengkap Ayah Kandung <span class="req">*</span></label>
-                    <input id="nama_ayah" type="text" name="nama_ayah" x-model="ayahNama" placeholder="Nama ayah kandung" class="in uppercase" required>
+                    <input id="nama_ayah" type="text" name="nama_ayah" x-model="ayahNama" placeholder="Nama ayah kandung" class="in uppercase">
                 </div>
                 <div>
                     <label for="nama_ibu" class="lb">Nama lengkap Ibu Kandung <span class="req">*</span></label>
-                    <input id="nama_ibu" type="text" name="nama_ibu" x-model="ibuNama" placeholder="Nama ibu kandung" class="in uppercase" required>
+                    <input id="nama_ibu" type="text" name="nama_ibu" x-model="ibuNama" placeholder="Nama ibu kandung" class="in uppercase">
                 </div>
             </div>
 
@@ -656,7 +662,7 @@ foreach ($errors->keys() as $k) {
                 </select>
             </div>
 
-            {{-- DATA PASANGAN (HANYA MUNCUL JIKA KAWIN) --}}
+            {{-- DATA PASANGAN (WAJIB HANYA JIKA STATUS = KAWIN / SUDAH MENIKAH) --}}
             <div x-show="nikah === 'KAWIN'" x-cloak class="sb space-y-4">
                 <p class="text-sm font-semibold text-slate-700">Data suami / istri</p>
                 <div>
@@ -671,7 +677,7 @@ foreach ($errors->keys() as $k) {
                 </div>
             </div>
 
-            {{-- JUMLAH ANAK (HANYA JIKA BUKAN BELUM MENIKAH) --}}
+            {{-- JUMLAH ANAK (TETAP BISA DIISI JIKA KAWIN, CERAI HIDUP, ATAU CERAI MATI) --}}
             <div x-show="nikah !== 'BELUM_KAWIN'" x-cloak>
                 <label for="jumlah_anak" class="lb">Jumlah anak (maksimal 10)</label>
                 <select id="jumlah_anak" name="jumlah_anak" x-model.number="anakN" class="in" :disabled="nikah === 'BELUM_KAWIN'">
@@ -716,6 +722,7 @@ foreach ($errors->keys() as $k) {
                 <h2 class="text-base font-semibold text-slate-900">Riwayat Pekerjaan</h2>
                 <p class="mt-0.5 text-sm text-slate-500">Kosongkan bagian yang tidak berlaku untuk Anda.</p>
             </div>
+            <div class="al" x-show="ada(4)" x-cloak x-text="pesan(4)"></div>
 
             {{-- REPEATER RIWAYAT LUAR --}}
             <div class="sb space-y-4">
@@ -812,7 +819,7 @@ foreach ($errors->keys() as $k) {
 
                     <div>
                         <label for="tgl_masuk_bulan" class="lb">Bulan <span class="req">*</span></label>
-                        <select id="tgl_masuk_bulan" name="tgl_masuk_bulan" x-model="masukBulan" class="in" required>
+                        <select id="tgl_masuk_bulan" name="tgl_masuk_bulan" x-model="masukBulan" class="in">
                             <option value="">Pilih bulan</option>
                             @foreach ([1=>'Januari',2=>'Februari',3=>'Maret',4=>'April',5=>'Mei',6=>'Juni',7=>'Juli',8=>'Agustus',9=>'September',10=>'Oktober',11=>'November',12=>'Desember'] as $angka => $namaBulan)
                                 <option value="{{ $angka }}">{{ $namaBulan }}</option>
@@ -822,7 +829,7 @@ foreach ($errors->keys() as $k) {
 
                     <div>
                         <label for="tgl_masuk_tahun" class="lb">Tahun <span class="req">*</span></label>
-                        <select id="tgl_masuk_tahun" name="tgl_masuk_tahun" x-model="masukTahun" class="in" required>
+                        <select id="tgl_masuk_tahun" name="tgl_masuk_tahun" x-model="masukTahun" class="in">
                             <option value="">Pilih tahun</option>
                             @for ($tahun = now()->year; $tahun >= 1970; $tahun--)
                                 <option value="{{ $tahun }}">{{ $tahun }}</option>
@@ -840,12 +847,13 @@ foreach ($errors->keys() as $k) {
 
         {{-- NAVIGASI --}}
         <div class="mt-6 flex items-center justify-between gap-3">
-            <button type="button" x-show="step > 1" x-cloak @click="step--" class="bt bl">Kembali</button>
+            <button type="button" x-show="step > 1" x-cloak @click="step--; window.scrollTo({ top: 0, behavior: 'smooth' })" class="bt bl">Kembali</button>
             <span x-show="step === 1" class="text-xs text-slate-500">Langkah 1 dari 4</span>
             <button type="button" x-show="step < 4" @click="lanjut()" class="bt bp">Lanjut</button>
-            <button type="submit" x-show="step === 4" x-cloak class="bt bp"
-                    onclick="return confirm('Pastikan data sudah benar. Kirim data ke HRD?')">
-                Kirim data
+            <button type="submit" x-show="step === 4" x-cloak
+                    :disabled="isSubmitting"
+                    class="bt bp disabled:opacity-50 disabled:cursor-not-allowed"
+                    x-text="isSubmitting ? 'Sedang mengirim...' : 'Kirim data'">
             </button>
         </div>
     </form>
@@ -870,7 +878,7 @@ function formKaryawan(initialData) {
                     if (savedDraft) {
                         const draft = JSON.parse(savedDraft);
                         Object.keys(draft).forEach((key) => {
-                            if (this[key] !== undefined) {
+                            if (this[key] !== undefined && key !== 'isSubmitting' && key !== 'errs') {
                                 this[key] = draft[key];
                             }
                         });
@@ -880,6 +888,10 @@ function formKaryawan(initialData) {
                 }
             }
 
+            this.nik = String(this.nik || '').replace(/\D/g, '').slice(0, 16);
+            this.rek = String(this.rek || '').replace(/\D/g, '').slice(0, 15);
+            this.step = Math.min(4, Math.max(1, Number(this.step) || 1));
+
             this.normalisasiArray();
 
             if (this.nikah === 'BELUM_KAWIN') {
@@ -888,6 +900,10 @@ function formKaryawan(initialData) {
                 this.pasanganNama = '';
                 this.kerjaPasangan = '';
             } else {
+                if (this.nikah !== 'KAWIN') {
+                    this.pasanganNama = '';
+                    this.kerjaPasangan = '';
+                }
                 this.siapkanAnak();
             }
 
@@ -904,6 +920,10 @@ function formKaryawan(initialData) {
                     this.pasanganNama = '';
                     this.kerjaPasangan = '';
                 } else {
+                    if (status !== 'KAWIN') {
+                        this.pasanganNama = '';
+                        this.kerjaPasangan = '';
+                    }
                     this.siapkanAnak();
                 }
             });
@@ -1013,15 +1033,14 @@ function formKaryawan(initialData) {
             const errors = {};
 
             if (stepNumber === 1) {
-                if (String(this.nik || '').replace(/\D/g, '').length !== 16) errors.nik = 'Nomor KTP wajib 16 angka.';
+                this.nik = String(this.nik || '').replace(/\D/g, '').slice(0, 16);
+                if (this.nik.length !== 16) errors.nik = 'Nomor KTP wajib pas 16 angka.';
                 if (!String(this.nama || '').trim()) errors.nama = 'Nama lengkap wajib diisi.';
                 if (!this.jk) errors.jk = 'Pilih jenis kelamin.';
-                if (!String(this.tempatLahir || '').trim()) errors.tempatLahir = 'Tempat lahir wajib diisi.';
                 if (!this.tglLahir) errors.tgl = 'Tanggal lahir wajib diisi.';
                 if (!String(this.alamatKtp || '').trim()) errors.alamat = 'Alamat sesuai KTP wajib diisi.';
 
-                // Validasi Email Biar Ga Typo
-                if (this.emailForm && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.emailForm)) {
+                if (this.emailForm && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.emailForm.trim())) {
                     errors.emailForm = 'Format email tidak valid (pastikan mengandung tanda @).';
                 }
 
@@ -1066,7 +1085,8 @@ function formKaryawan(initialData) {
 
                 if (!this.bersediaTransfer) errors.transfer = 'Pertanyaan kesediaan transfer gaji wajib dipilih.';
 
-                const jumlahDigitRekening = String(this.rek || '').replace(/\D/g, '').length;
+                this.rek = String(this.rek || '').replace(/\D/g, '').slice(0, 15);
+                const jumlahDigitRekening = this.rek.length;
                 if (jumlahDigitRekening > 0 && jumlahDigitRekening !== 9 && jumlahDigitRekening !== 10 && jumlahDigitRekening !== 15) {
                     errors.rekening = 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.';
                 }
@@ -1076,6 +1096,7 @@ function formKaryawan(initialData) {
                 if (!String(this.ayahNama || '').trim()) errors.ayah = 'Nama lengkap ayah kandung wajib diisi.';
                 if (!String(this.ibuNama || '').trim()) errors.ibu = 'Nama lengkap ibu kandung wajib diisi.';
 
+                // Nama pasangan wajib HANYA jika status pernikahan = KAWIN (Sudah menikah)
                 if (this.nikah === 'KAWIN' && !String(this.pasanganNama || '').trim()) {
                     errors.pasangan = 'Nama suami / istri wajib diisi.';
                 }
@@ -1099,6 +1120,16 @@ function formKaryawan(initialData) {
             if (stepNumber === 4) {
                 if (!this.masukBulan) errors.bulanMasuk = 'Bulan masuk kerja wajib dipilih.';
                 if (!this.masukTahun) errors.tahunMasuk = 'Tahun masuk kerja wajib dipilih.';
+
+                if (this.masukTgl && this.masukBulan && this.masukTahun) {
+                    const d = Number(this.masukTgl);
+                    const m = Number(this.masukBulan);
+                    const y = Number(this.masukTahun);
+                    const testDate = new Date(y, m - 1, d);
+                    if (testDate.getFullYear() !== y || testDate.getMonth() !== (m - 1) || testDate.getDate() !== d) {
+                        errors.tanggalMasuk = 'Tanggal tidak sesuai dengan bulan yang dipilih.';
+                    }
+                }
             }
 
             this.errs = { ...this.errs, [stepNumber]: errors };
@@ -1107,13 +1138,21 @@ function formKaryawan(initialData) {
 
         lanjut() {
             const currentStep = Number(this.step);
-            if (!this.cek(currentStep)) return;
+            if (!this.cek(currentStep)) {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
             this.step = Math.min(currentStep + 1, 4);
             this.saveDraft();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         },
 
         kirim(event) {
+            if (this.isSubmitting) {
+                event.preventDefault();
+                return;
+            }
+
             for (let stepNumber = 1; stepNumber <= 4; stepNumber++) {
                 if (!this.cek(stepNumber)) {
                     event.preventDefault();
@@ -1122,6 +1161,13 @@ function formKaryawan(initialData) {
                     return;
                 }
             }
+
+            if (!confirm('Pastikan data sudah benar. Kirim data ke HRD?')) {
+                event.preventDefault();
+                return;
+            }
+
+            this.isSubmitting = true;
             this.saveDraft();
         },
 

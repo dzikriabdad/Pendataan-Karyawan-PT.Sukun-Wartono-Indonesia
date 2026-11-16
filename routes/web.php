@@ -80,3 +80,6 @@ Route::put('/pendataan/update/{token}', [
     PendataanController::class,
     'updateByToken',
 ])->name('pendataan.update.token');
+Route::post('/hrd/karyawan/import', [PendataanController::class, 'importExcel'])->name('pendataan.import');
+Route::get('/hrd/karyawan/template', [PendataanController::class, 'downloadTemplate'])->name('pendataan.template');
+Route::get('/pendataan/template-import', [PendataanController::class, 'downloadTemplate'])->name('pendataan.template');

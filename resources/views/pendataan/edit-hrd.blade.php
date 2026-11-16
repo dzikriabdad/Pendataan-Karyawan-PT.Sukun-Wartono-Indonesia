@@ -154,7 +154,10 @@
                 </div>
                 <div>
                     <label class="lb">NIK KTP (16 Angka) <span class="req">*</span></label>
-                    <input type="text" name="nik_ktp" value="{{ old('nik_ktp', $karyawan->nik_ktp) }}" maxlength="16" inputmode="numeric" class="in font-mono" required>
+                    <input type="text" name="nik_ktp"
+                           value="{{ old('nik_ktp', $karyawan->nik_ktp) }}"
+                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 16)"
+                           maxlength="16" inputmode="numeric" class="in font-mono" required>
                 </div>
                 <div>
                     <label class="lb">NIP</label>
@@ -174,30 +177,30 @@
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-    <div>
-        <label class="lb">Jenis Kelamin <span class="req">*</span></label>
-        <select name="jenis_kelamin" class="in" required>
-            <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'L')>Laki-laki</option>
-            <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'P')>Perempuan</option>
-        </select>
-    </div>
-    <div>
-        <label class="lb">Tempat Lahir <span class="req">*</span></label>
-        <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir', $karyawan->tempat_lahir) }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
-    </div>
-    <div>
-        <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-        <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
-    </div>
-    <div>
-        <label class="lb">Golongan Darah</label>
-        <select name="golongan_darah" class="in">
-            @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gV => $gL)
-                <option value="{{ $gV }}" @selected(old('golongan_darah', $karyawan->golongan_darah) === $gV)>{{ $gL }}</option>
-            @endforeach
-        </select>
-    </div>
-</div>
+                <div>
+                    <label class="lb">Jenis Kelamin <span class="req">*</span></label>
+                    <select name="jenis_kelamin" class="in" required>
+                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'P')>Perempuan</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="lb">Tempat Lahir</label>
+                    <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir', $karyawan->tempat_lahir) }}" class="in uppercase" placeholder="Contoh: KUDUS">
+                </div>
+                <div>
+                    <label class="lb">Tanggal Lahir <span class="req">*</span></label>
+                    <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
+                </div>
+                <div>
+                    <label class="lb">Golongan Darah</label>
+                    <select name="golongan_darah" class="in">
+                        @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gV => $gL)
+                            <option value="{{ $gV }}" @selected(old('golongan_darah', $karyawan->golongan_darah) === $gV)>{{ $gL }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -255,6 +258,7 @@
                         <div>
                             <label class="lb">Jenjang Pendidikan</label>
                             <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" class="in">
+                                <option value="TIDAK SEKOLAH">Tidak Sekolah</option>
                                 <option value="SD">SD</option>
                                 <option value="SMP">SMP / MTs</option>
                                 <option value="SMA/SMK">SMA / SMK / MA</option>
@@ -292,7 +296,13 @@
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                     <label class="lb">Nomor Rekening</label>
-                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="BNI (9-10) / BRI (15)" pattern="^(\d{9,10}|\d{15})?$" title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
+                    <input type="text" name="no_rekening"
+                           value="{{ old('no_rekening', $karyawan->no_rekening) }}"
+                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 15)"
+                           maxlength="15" inputmode="numeric"
+                           class="in font-mono" placeholder="BNI (9-10) / BRI (15)"
+                           pattern="^(\d{9,10}|\d{15})?$"
+                           title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
                 </div>
                 <div>
                     <label class="lb">Atas Nama Rekening</label>
@@ -421,21 +431,29 @@
                         <option value="CERAI_MATI">Cerai mati</option>
                     </select>
                 </div>
-                <div x-show="nikah === 'KAWIN'" class="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {{-- Nama pasangan hanya wajib & aktif jika status = KAWIN (tidak mandatory untuk CERAI_HIDUP & CERAI_MATI) --}}
+                <div x-show="nikah === 'KAWIN'" x-cloak class="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="lb">Nama Suami / Istri</label>
-                        <input type="text" name="nama_pasangan" value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}" class="in uppercase">
+                        <label class="lb">Nama Suami / Istri <span class="req">*</span></label>
+                        <input type="text" name="nama_pasangan"
+                               value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}"
+                               :disabled="nikah !== 'KAWIN'"
+                               :required="nikah === 'KAWIN'"
+                               class="in uppercase">
                     </div>
                     <div>
                         <label class="lb">Pekerjaan Pasangan</label>
-                        <input type="text" name="pekerjaan_pasangan" value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}" class="in">
+                        <input type="text" name="pekerjaan_pasangan"
+                               value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}"
+                               :disabled="nikah !== 'KAWIN'"
+                               class="in">
                     </div>
                 </div>
             </div>
 
-            <div x-show="nikah !== 'BELUM_KAWIN'" class="pt-2">
+            <div x-show="nikah !== 'BELUM_KAWIN'" x-cloak class="pt-2">
                 <label class="lb">Jumlah Anak (Maksimal 10)</label>
-                <select name="jumlah_anak" x-model.number="anakN" class="in">
+                <select name="jumlah_anak" x-model.number="anakN" :disabled="nikah === 'BELUM_KAWIN'" class="in">
                     <option value="0">Tidak ada / 0 anak</option>
                     @for($n = 1; $n <= 10; $n++)
                         <option value="{{ $n }}">{{ $n }} anak</option>
@@ -443,13 +461,13 @@
                 </select>
             </div>
 
-            <div class="space-y-4 pt-2" x-show="nikah !== 'BELUM_KAWIN' && anakN > 0">
+            <div class="space-y-4 pt-2" x-show="nikah !== 'BELUM_KAWIN' && anakN > 0" x-cloak>
                 <template x-for="(an, index) in anakList" :key="index">
                     <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200">
                         <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + (index + 1)"></p>
                         <div>
-                            <label class="lb">Nama Lengkap Anak</label>
-                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" class="in uppercase" placeholder="Nama Lengkap Anak">
+                            <label class="lb">Nama Lengkap Anak <span class="req">*</span></label>
+                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" required class="in uppercase" placeholder="Nama Lengkap Anak">
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>

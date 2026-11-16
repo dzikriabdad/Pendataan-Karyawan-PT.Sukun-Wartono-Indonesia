@@ -43,11 +43,11 @@
         </div>
     @endif
 
-    <form action="{{ route('pendataan.update.token', $karyawan->token) }}" method="POST" class="space-y-6" x-data="{ 
+    <form action="{{ route('pendataan.update.token', $karyawan->token) }}" method="POST" class="space-y-6" x-data="{
         tipe: '{{ old('tipe_karyawan', $karyawan->tipe_karyawan) }}',
         unitId: '{{ old('unit_organisasi_id', $karyawan->unit_organisasi_id) }}',
         jabatanDipilih: '{{ old('nama_jabatan', $karyawan->nama_jabatan) }}',
-        nikah: '{{ old('status_pernikahan', $karyawan->status_pernikahan) }}', 
+        nikah: '{{ old('status_pernikahan', $karyawan->status_pernikahan) }}',
         anakN: {{ (int) old('jumlah_anak', count($anak ?? [])) }},
         anakList: @js(array_values(old('anak', count($anak ?? []) > 0 ? $anak->map(fn($a) => [
             'nama_anak' => $a->nama_anak,
@@ -141,7 +141,7 @@
         {{-- 2. INFORMASI DATA DIRI & ORANG TUA --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">2. Informasi Pribadi & Orang Tua</h3>
-            
+
             <div>
                 <label class="lb">Nama Lengkap Sesuai KTP <span class="text-xs font-normal text-slate-400">(Terkunci)</span></label>
                 <input type="text" value="{{ $karyawan->nama_lengkap }}" disabled class="in bg-slate-200 text-slate-600 font-semibold uppercase cursor-not-allowed">
@@ -169,31 +169,31 @@
                 </div>
             </div>
 
-           <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-    <div>
-        <label class="lb">Jenis Kelamin <span class="req">*</span></label>
-        <select name="jenis_kelamin" class="in" required>
-            <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
-            <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
-        </select>
-    </div>
-    <div>
-        <label class="lb">Tempat Lahir <span class="req">*</span></label>
-        <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir', $karyawan->tempat_lahir) }}" class="in uppercase" placeholder="Contoh: KUDUS" required>
-    </div>
-    <div>
-        <label class="lb">Tanggal Lahir <span class="req">*</span></label>
-        <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
-    </div>
-    <div>
-        <label class="lb">Golongan Darah</label>
-        <select name="golongan_darah" class="in">
-            @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
-                <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
-            @endforeach
-        </select>
-    </div>
-</div>
+            <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                <div>
+                    <label class="lb">Jenis Kelamin <span class="req">*</span></label>
+                    <select name="jenis_kelamin" class="in" required>
+                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="lb">Tempat Lahir</label>
+                    <input type="text" name="tempat_lahir" value="{{ old('tempat_lahir', $karyawan->tempat_lahir) }}" class="in uppercase" placeholder="Contoh: KUDUS">
+                </div>
+                <div>
+                    <label class="lb">Tanggal Lahir <span class="req">*</span></label>
+                    <input type="date" name="tgl_lahir" value="{{ old('tgl_lahir', $karyawan->tgl_lahir) }}" class="in" required>
+                </div>
+                <div>
+                    <label class="lb">Golongan Darah</label>
+                    <select name="golongan_darah" class="in">
+                        @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
+                            <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            </div>
 
             <div>
                 <label class="lb">Disabilitas Jika ada Tulis, Jenis Disabilitasnya</label>
@@ -245,6 +245,7 @@
                             <label class="lb">Jenjang Pendidikan <span class="req">*</span></label>
                             <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" class="in" required>
                                 <option value="">-- Pilih Jenjang --</option>
+                                <option value="TIDAK SEKOLAH">Tidak Sekolah</option>
                                 <option value="SD">SD</option>
                                 <option value="SMP">SMP / MTs</option>
                                 <option value="SMA/SMK">SMA / SMK / MA</option>
@@ -279,7 +280,7 @@
         {{-- 4. STATUS KELUARGA & ANAK --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">4. Status Keluarga & Anak</h3>
-            
+
             <div>
                 <label class="lb">Status Pernikahan <span class="req">*</span></label>
                 <select name="status_pernikahan" x-model="nikah" class="in" required>
@@ -290,14 +291,22 @@
                 </select>
             </div>
 
+            {{-- Nama pasangan hanya wajib & aktif jika status = KAWIN (tidak mandatory untuk CERAI_HIDUP & CERAI_MATI) --}}
             <div x-show="nikah === 'KAWIN'" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                     <label class="lb">Nama Suami / Istri (Pasangan) <span class="req">*</span></label>
-                    <input type="text" name="nama_pasangan" value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}" :disabled="nikah !== 'KAWIN'" class="in uppercase" placeholder="Nama lengkap pasangan">
+                    <input type="text" name="nama_pasangan"
+                           value="{{ old('nama_pasangan', $pasangan->nama_pasangan ?? '') }}"
+                           :disabled="nikah !== 'KAWIN'"
+                           :required="nikah === 'KAWIN'"
+                           class="in uppercase" placeholder="Nama lengkap pasangan">
                 </div>
                 <div>
                     <label class="lb">Pekerjaan Pasangan</label>
-                    <input type="text" name="pekerjaan_pasangan" value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}" :disabled="nikah !== 'KAWIN'" class="in" placeholder="Pekerjaan pasangan">
+                    <input type="text" name="pekerjaan_pasangan"
+                           value="{{ old('pekerjaan_pasangan', $pasangan->pekerjaan_pasangan ?? '') }}"
+                           :disabled="nikah !== 'KAWIN'"
+                           class="in" placeholder="Pekerjaan pasangan">
                 </div>
             </div>
 
@@ -318,7 +327,7 @@
                         <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + (index + 1)"></p>
                         <div>
                             <label class="lb">Nama lengkap anak <span class="req">*</span></label>
-                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" class="in uppercase" placeholder="Nama Lengkap Anak">
+                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" required class="in uppercase" placeholder="Nama Lengkap Anak">
                         </div>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
@@ -438,11 +447,17 @@
         {{-- 7. PERBANKAN & ADMINISTRASI --}}
         <div class="cd space-y-4">
             <h3 class="text-base font-bold text-slate-900 border-b pb-2">7. Perbankan & Administrasi</h3>
-            
+
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Nomor Rekening (9-10 digit BNI / 15 digit BRI)</label>
-                    <input type="text" name="no_rekening" value="{{ old('no_rekening', $karyawan->no_rekening) }}" class="in font-mono" placeholder="BNI (9-10 digit) / BRI (15 digit)" pattern="^(\d{9,10}|\d{15})?$" title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
+                    <input type="text" name="no_rekening"
+                           value="{{ old('no_rekening', $karyawan->no_rekening) }}"
+                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 15)"
+                           maxlength="15" inputmode="numeric"
+                           class="in font-mono" placeholder="BNI (9-10 digit) / BRI (15 digit)"
+                           pattern="^(\d{9,10}|\d{15})?$"
+                           title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
                 </div>
                 <div>
                     <label class="lb">Atas Nama Rekening</label>
