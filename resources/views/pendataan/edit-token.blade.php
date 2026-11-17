@@ -43,52 +43,51 @@
         </div>
     @endif
 
-    <form action="{{ route('pendataan.update.token', $karyawan->token) }}" method="POST" class="space-y-6" x-data="{
-        tipe: '{{ old('tipe_karyawan', $karyawan->tipe_karyawan) }}',
-        unitId: '{{ old('unit_organisasi_id', $karyawan->unit_organisasi_id) }}',
-        jabatanDipilih: '{{ old('nama_jabatan', $karyawan->nama_jabatan) }}',
-        nikah: '{{ old('status_pernikahan', $karyawan->status_pernikahan) }}',
-        anakN: {{ (int) old('jumlah_anak', count($anak ?? [])) }},
-        anakList: @js(array_values(old('anak', count($anak ?? []) > 0 ? $anak->map(fn($a) => [
-            'nama_anak' => $a->nama_anak,
-            'tgl_lahir_anak' => $a->tgl_lahir_anak,
-            'pendidikan_anak' => $a->pendidikan_anak,
-        ])->toArray() : []))),
-        pendList: @js(array_values(old('riwayat_pendidikan', count($pendidikan ?? []) > 0 ? $pendidikan->map(fn($p) => [
-            'jenjang' => $p->jenjang,
-            'nama_instansi' => $p->nama_instansi,
-            'jurusan' => $p->jurusan,
-            'nilai_ipk' => $p->nilai_ipk,
-        ])->toArray() : [['jenjang' => 'SD', 'nama_instansi' => '', 'jurusan' => '', 'nilai_ipk' => '']]))),
-        sukunList: @js(array_values(old('riwayat_sukun', count($riwayatSukun ?? []) > 0 ? $riwayatSukun->map(fn($r) => [
-            'bagian' => $r->unit_bagian,
-            'jabatan' => $r->jabatan,
-            'tahun_mulai' => $r->tgl_mulai ? substr($r->tgl_mulai, 0, 4) : '',
-            'tahun_selesai' => $r->tgl_selesai ? substr($r->tgl_selesai, 0, 4) : '',
-        ])->toArray() : [['bagian' => '', 'jabatan' => '', 'tahun_mulai' => '', 'tahun_selesai' => '']]))),
-        luarList: @js(array_values(old('riwayat_luar', count($pengalaman ?? []) > 0 ? $pengalaman->map(fn($p) => [
-            'perusahaan' => $p->nama_perusahaan,
-            'jabatan' => $p->jabatan,
-            'tahun_masuk' => $p->tahun_masuk,
-            'tahun_keluar' => $p->tahun_keluar,
-        ])->toArray() : [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']])))
-    }"
-    x-init="
-        let syncAnak = () => {
-            let target = parseInt(anakN) || 0;
-            while(anakList.length < target) {
-                anakList.push({ nama_anak: '', tgl_lahir_anak: '', pendidikan_anak: 'BELUM SEKOLAH' });
-            }
-            while(anakList.length > target) {
-                anakList.pop();
-            }
-        };
-        syncAnak();
-        $watch('anakN', () => syncAnak());
-        $watch('nikah', (val) => {
-            if (val === 'BELUM_KAWIN') anakN = 0;
-        });
-    ">
+    @php
+        $riwayatLuarData = $pengalaman ?? $riwayatLuar ?? collect();
+    @endphp
+
+    <form action="{{ route('pendataan.update.token', $karyawan->token) }}" method="POST" class="space-y-6"
+        x-data="editKaryawanForm({
+            isSubmitting: false,
+            tipe: @js(old('tipe_karyawan', $karyawan->tipe_karyawan ?? 'BULANAN')),
+            unitId: @js((string) old('unit_organisasi_id', $karyawan->unit_organisasi_id ?? '')),
+            unitNama: '',
+            jabatanDipilih: @js(old('nama_jabatan', $karyawan->nama_jabatan ?? '')),
+            distribusiJabatan: '',
+            rmRegional: '',
+            amWilayah: '',
+            borongId: @js((string) old('jabatan_borong_id', $karyawan->jabatan_borong_id ?? '')),
+            kotaId: @js((string) old('kota_perwakilan_id', $karyawan->kota_perwakilan_id ?? '')),
+            areaId: @js((string) old('area_id', $karyawan->area_id ?? '')),
+            rek: @js(old('no_rekening', $karyawan->no_rekening ?? '')),
+            nikah: @js(old('status_pernikahan', $karyawan->status_pernikahan ?? 'BELUM_KAWIN')),
+            anakN: {{ old('status_pernikahan', $karyawan->status_pernikahan) === 'BELUM_KAWIN' ? 0 : (int) old('jumlah_anak', count($anak ?? [])) }},
+            anakList: @js(array_values(old('anak', count($anak ?? []) > 0 ? $anak->map(fn($a) => [
+                'nama_anak' => $a->nama_anak,
+                'tgl_lahir_anak' => $a->tgl_lahir_anak,
+                'pendidikan_anak' => $a->pendidikan_anak ?? 'BELUM SEKOLAH',
+            ])->toArray() : []))),
+            pendList: @js(array_values(old('riwayat_pendidikan', count($pendidikan ?? []) > 0 ? $pendidikan->map(fn($p) => [
+                'jenjang' => $p->jenjang,
+                'nama_instansi' => $p->nama_instansi,
+                'jurusan' => $p->jurusan,
+                'nilai_ipk' => $p->nilai_ipk,
+            ])->toArray() : [['jenjang' => 'SD', 'nama_instansi' => '', 'jurusan' => '', 'nilai_ipk' => '']]))),
+            sukunList: @js(array_values(old('riwayat_sukun', count($riwayatSukun ?? []) > 0 ? $riwayatSukun->map(fn($r) => [
+                'bagian' => $r->unit_bagian,
+                'jabatan' => $r->jabatan,
+                'tahun_mulai' => $r->tgl_mulai ? substr($r->tgl_mulai, 0, 4) : ($r->tahun_mulai ?? ''),
+                'tahun_selesai' => $r->tgl_selesai ? substr($r->tgl_selesai, 0, 4) : ($r->tahun_selesai ?? ''),
+            ])->toArray() : [['bagian' => '', 'jabatan' => '', 'tahun_mulai' => '', 'tahun_selesai' => '']]))),
+            luarList: @js(array_values(old('riwayat_luar', count($riwayatLuarData) > 0 ? $riwayatLuarData->map(fn($p) => [
+                'perusahaan' => $p->nama_perusahaan,
+                'jabatan' => $p->jabatan,
+                'tahun_masuk' => $p->tahun_masuk,
+                'tahun_keluar' => $p->tahun_keluar,
+            ])->toArray() : [['perusahaan' => '', 'jabatan' => '', 'tahun_masuk' => '', 'tahun_keluar' => '']])))
+        })"
+        @submit="if (isSubmitting) { $event.preventDefault(); return; } isSubmitting = true;">
         @csrf
         @method('PUT')
 
@@ -98,7 +97,8 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="lb">Jenis Karyawan <span class="req">*</span></label>
-                    <select name="tipe_karyawan" x-model="tipe" class="in" required>
+                    <select name="tipe_karyawan" x-model="tipe" class="in" required
+                            @change="jabatanDipilih = ''; distribusiJabatan = ''; rmRegional = ''; amWilayah = ''; if (tipe === 'DISTRIBUSI') { unitId = ''; unitNama = ''; }">
                         <option value="BULANAN">Bulanan</option>
                         <option value="HARIAN">Harian</option>
                         <option value="BORONG">Borong</option>
@@ -109,21 +109,34 @@
                     <label class="lb">Status Karyawan <span class="req">*</span></label>
                     <select name="ket_karyawan" class="in" required>
                         <option value="TETAP" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'TETAP')>TETAP</option>
-                        <option value="HARIAN_LEPAS" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'HARIAN_LEPAS' || old('ket_karyawan', $karyawan->ket_karyawan) === 'TIDAK_TETAP')>HARIAN LEPAS</option>
+                        <option value="HARIAN_LEPAS" @selected(in_array(old('ket_karyawan', $karyawan->ket_karyawan), ['HARIAN_LEPAS', 'TIDAK_TETAP'], true))>HARIAN LEPAS</option>
                         <option value="KONTRAK" @selected(old('ket_karyawan', $karyawan->ket_karyawan) === 'KONTRAK')>KONTRAK</option>
                     </select>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {{-- BAGIAN UNIT KERJA (SELAIN DISTRIBUSI) --}}
+            <div x-show="tipe !== 'DISTRIBUSI'" class="sb space-y-4">
                 <div>
                     <label class="lb">Bagian / Unit Kerja <span class="req">*</span></label>
-                    <select name="unit_organisasi_id" x-model="unitId" class="in" required>
+                    <select id="unit_organisasi_id" name="unit_organisasi_id" x-model="unitId"
+                            :disabled="tipe === 'DISTRIBUSI'"
+                            :required="tipe !== 'DISTRIBUSI'"
+                            @change="const o = $event.target.selectedOptions[0]; unitNama = (o ? o.text.trim() : ''); jabatanDipilih = ''"
+                            class="in">
                         <option value="">-- Pilih Unit Kerja --</option>
                         @foreach ($departemen as $dep)
                             <optgroup label="{{ $dep->nama_departemen }}">
                                 @foreach ($unitOrganisasi->where('departemen_id', $dep->id) as $u)
-                                    <option value="{{ $u->id }}" @selected(old('unit_organisasi_id', $karyawan->unit_organisasi_id) == $u->id)>
+                                    @php
+                                        $namaUnitUp = strtoupper(trim($u->nama_unit));
+                                        $isPerwakilan = str_contains($namaUnitUp, 'PERWAKILAN');
+                                        $isRegional = str_contains($namaUnitUp, 'REGIONAL');
+                                    @endphp
+                                    @if (strtoupper($dep->nama_departemen) === 'DISTRIBUSI' && ($isPerwakilan || $isRegional))
+                                        @continue
+                                    @endif
+                                    <option value="{{ $u->id }}" @selected((string) old('unit_organisasi_id', $karyawan->unit_organisasi_id) === (string) $u->id)>
                                         {{ $u->nama_unit }}
                                     </option>
                                 @endforeach
@@ -131,10 +144,129 @@
                         @endforeach
                     </select>
                 </div>
-                <div>
+
+                {{-- JABATAN (SATPAM = DROPDOWN, SELAIN SATPAM & BORONG = FREETEXT) --}}
+                <div x-show="tipe !== 'BORONG'">
                     <label class="lb">Nama Jabatan <span class="req">*</span></label>
-                    <input type="text" name="nama_jabatan" x-model="jabatanDipilih" class="in uppercase" placeholder="Ketik nama jabatan Anda saat ini" required>
+                    <div x-show="isSatpam()">
+                        <select name="nama_jabatan" x-model="jabatanDipilih" class="in"
+                                :disabled="tipe === 'DISTRIBUSI' || tipe === 'BORONG' || !unitId || !isSatpam()"
+                                :required="tipe !== 'DISTRIBUSI' && tipe !== 'BORONG' && isSatpam()">
+                            <option value="">-- Pilih Jabatan Satpam --</option>
+                            <template x-for="jbt in ['Anggota', 'Wadanru', 'Danru', 'Danton', 'Kepala Satpam']" :key="jbt">
+                                <option :value="jbt" x-text="jbt" :selected="jabatanDipilih === jbt"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div x-show="!isSatpam()">
+                        <input type="text" name="nama_jabatan" x-model="jabatanDipilih"
+                               class="in uppercase"
+                               :placeholder="unitId ? 'Ketik nama jabatan Anda saat ini' : 'Pilih bagian / unit kerja terlebih dahulu'"
+                               :disabled="tipe === 'DISTRIBUSI' || tipe === 'BORONG' || !unitId || isSatpam()"
+                               :required="tipe !== 'DISTRIBUSI' && tipe !== 'BORONG' && !isSatpam()">
+                    </div>
                 </div>
+            </div>
+
+            {{-- BAGIAN BORONG --}}
+            @if(isset($jabatanBorong))
+            <div x-show="tipe === 'BORONG'" x-cloak class="sb">
+                <label class="lb">Jenis Pekerjaan Borong <span class="req">*</span></label>
+                <select name="jabatan_borong_id" x-model="borongId" class="in"
+                        :disabled="tipe !== 'BORONG'"
+                        :required="tipe === 'BORONG'">
+                    <option value="">-- Pilih Pekerjaan Borong --</option>
+                    @foreach ($jabatanBorong as $jb)
+                        <option value="{{ $jb->id }}" @selected((string) old('jabatan_borong_id', $karyawan->jabatan_borong_id) === (string) $jb->id)>
+                            {{ $jb->nama_jabatan_borong }}
+                        </option>
+                    @endforeach
+                </select>
+            </div>
+            @endif
+
+            {{-- BAGIAN DISTRIBUSI --}}
+            <div x-show="tipe === 'DISTRIBUSI'" x-cloak class="sb space-y-4">
+                <input type="hidden" name="nama_jabatan" :value="finalJabatanDistribusi()" :disabled="tipe !== 'DISTRIBUSI'">
+
+                <div>
+                    <label class="lb">Jabatan Distribusi Cabang <span class="req">*</span></label>
+                    <select x-model="distribusiJabatan" class="in"
+                            @change="if (distribusiJabatan !== 'RM') rmRegional = ''; if (distribusiJabatan !== 'AM') amWilayah = '';"
+                            :disabled="tipe !== 'DISTRIBUSI'"
+                            :required="tipe === 'DISTRIBUSI'">
+                        <option value="">-- Pilih Jabatan Distribusi --</option>
+                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO','ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
+                            <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div x-show="distribusiJabatan === 'RM'" x-cloak class="rounded-lg bg-blue-50 border border-blue-200 p-4">
+                    <label class="lb text-blue-900">Pilih Wilayah Regional (RM) <span class="req">*</span></label>
+                    <select x-model="rmRegional" class="in" :required="tipe === 'DISTRIBUSI' && distribusiJabatan === 'RM'">
+                        <option value="">-- Pilih Regional (1 - 3) --</option>
+                        <option value="Regional 1">Regional 1</option>
+                        <option value="Regional 2">Regional 2</option>
+                        <option value="Regional 3">Regional 3</option>
+                    </select>
+                </div>
+
+                <div x-show="distribusiJabatan === 'AM'" x-cloak class="rounded-lg bg-blue-50 border border-blue-200 p-4">
+                    <label class="lb text-blue-900">Pilih Wilayah Area Manager (AM) <span class="req">*</span></label>
+                    <select x-model="amWilayah" class="in" :required="tipe === 'DISTRIBUSI' && distribusiJabatan === 'AM'">
+                        <option value="">-- Pilih Wilayah AM --</option>
+                        <optgroup label="Jawa Tengah">
+                            <option value="Jateng 1">Jateng 1</option>
+                            <option value="Jateng 2">Jateng 2</option>
+                            <option value="Jateng 3">Jateng 3</option>
+                        </optgroup>
+                        <optgroup label="Jawa Barat">
+                            <option value="Jabar 1">Jabar 1</option>
+                            <option value="Jabar 2">Jabar 2</option>
+                        </optgroup>
+                        <optgroup label="Jawa Timur">
+                            <option value="Jatim 1">Jatim 1</option>
+                            <option value="Jatim 2">Jatim 2</option>
+                            <option value="Jatim 3">Jatim 3</option>
+                        </optgroup>
+                        <optgroup label="Luar Jawa">
+                            <option value="Sumatra">Sumatra</option>
+                            <option value="Kalimantan">Kalimantan</option>
+                        </optgroup>
+                    </select>
+                </div>
+
+                @if(isset($kotaPerwakilan) && isset($area))
+                <div x-show="distribusiJabatan !== 'RM' && distribusiJabatan !== 'AM'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="lb">Kota Perwakilan <span class="req">*</span></label>
+                        <select name="kota_perwakilan_id" x-model="kotaId" class="in"
+                                :disabled="tipe !== 'DISTRIBUSI' || distribusiJabatan === 'RM' || distribusiJabatan === 'AM'"
+                                :required="tipe === 'DISTRIBUSI' && distribusiJabatan !== 'RM' && distribusiJabatan !== 'AM'">
+                            <option value="">-- Pilih Kota --</option>
+                            @foreach ($kotaPerwakilan as $kp)
+                                <option value="{{ $kp->id }}" @selected((string) old('kota_perwakilan_id', $karyawan->kota_perwakilan_id) === (string) $kp->id)>
+                                    {{ $kp->nama_kota }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
+                        <label class="lb">Area <span class="req">*</span></label>
+                        <select name="area_id" x-model="areaId" class="in"
+                                :disabled="tipe !== 'DISTRIBUSI' || distribusiJabatan === 'RM' || distribusiJabatan === 'AM'"
+                                :required="tipe === 'DISTRIBUSI' && distribusiJabatan !== 'RM' && distribusiJabatan !== 'AM'">
+                            <option value="">-- Pilih Area --</option>
+                            @foreach ($area as $a)
+                                <option value="{{ $a->id }}" @selected((string) old('area_id', $karyawan->area_id) === (string) $a->id)>
+                                    {{ $a->nama_area }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+                @endif
             </div>
         </div>
 
@@ -173,8 +305,8 @@
                 <div>
                     <label class="lb">Jenis Kelamin <span class="req">*</span></label>
                     <select name="jenis_kelamin" class="in" required>
-                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'L')>Laki-laki</option>
-                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) == 'P')>Perempuan</option>
+                        <option value="L" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'L')>Laki-laki</option>
+                        <option value="P" @selected(old('jenis_kelamin', $karyawan->jenis_kelamin) === 'P')>Perempuan</option>
                     </select>
                 </div>
                 <div>
@@ -189,7 +321,7 @@
                     <label class="lb">Golongan Darah</label>
                     <select name="golongan_darah" class="in">
                         @foreach(['-'=>'Tidak diketahui', 'A'=>'A', 'B'=>'B', 'AB'=>'AB', 'O'=>'O'] as $gVal => $gLabel)
-                            <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah) == $gVal)>{{ $gLabel }}</option>
+                            <option value="{{ $gVal }}" @selected(old('golongan_darah', $karyawan->golongan_darah ?? '-') === $gVal)>{{ $gLabel }}</option>
                         @endforeach
                     </select>
                 </div>
@@ -202,8 +334,8 @@
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <label class="lb">Nomor WhatsApp / HP <span class="req">*</span></label>
-                    <input type="text" name="no_wa" value="{{ old('no_wa', $karyawan->no_wa) }}" class="in" placeholder="08xxxxxxxxxx" required>
+                    <label class="lb">Nomor WhatsApp / HP</label>
+                    <input type="text" name="no_wa" inputmode="numeric" value="{{ old('no_wa', $karyawan->no_wa) }}" class="in" placeholder="08xxxxxxxxxx">
                 </div>
                 <div>
                     <label class="lb">Email</label>
@@ -227,7 +359,7 @@
             <div class="flex items-center justify-between border-b pb-2">
                 <div>
                     <h3 class="text-base font-bold text-slate-900">3. Riwayat Pendidikan (SD s/d Terakhir) <span class="req">*</span></h3>
-                    <p class="text-xs text-slate-500">Isi riwayat jenjang pendidikan Anda dari SD hingga pendidikan terakhir.</p>
+                    <p class="text-xs text-slate-500">Isi riwayat jenjang pendidikan Anda dari SD hingga pendidikan terakhir, atau pilih Tidak Sekolah.</p>
                 </div>
                 <button type="button" @click="pendList.push({ jenjang: '', nama_instansi: '', jurusan: '', nilai_ipk: '' })" class="px-3 py-1.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-md hover:bg-blue-200">
                     + Tambah Pendidikan
@@ -243,7 +375,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="lb">Jenjang Pendidikan <span class="req">*</span></label>
-                            <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" class="in" required>
+                            <select :name="'riwayat_pendidikan[' + index + '][jenjang]'" x-model="rp.jenjang" @change="onJenjangChange(rp)" class="in" required>
                                 <option value="">-- Pilih Jenjang --</option>
                                 <option value="TIDAK SEKOLAH">Tidak Sekolah</option>
                                 <option value="SD">SD</option>
@@ -260,17 +392,32 @@
                         </div>
                         <div>
                             <label class="lb">Nama Sekolah / Instansi / Universitas <span class="req">*</span></label>
-                            <input type="text" :name="'riwayat_pendidikan[' + index + '][nama_instansi]'" x-model="rp.nama_instansi" class="in uppercase" placeholder="Nama Sekolah / Kampus" required>
+                            <input type="text"
+                                   :name="'riwayat_pendidikan[' + index + '][nama_instansi]'"
+                                   x-model="rp.nama_instansi"
+                                   :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                   :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in uppercase bg-slate-100 text-slate-500 cursor-not-allowed' : 'in uppercase'"
+                                   placeholder="Nama Sekolah / Kampus" required>
                         </div>
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="lb">Jurusan / Program Studi</label>
-                            <input type="text" :name="'riwayat_pendidikan[' + index + '][jurusan]'" x-model="rp.jurusan" class="in uppercase" placeholder="Jurusan (Kosongkan jika SD/SMP)">
+                            <input type="text"
+                                   :name="'riwayat_pendidikan[' + index + '][jurusan]'"
+                                   x-model="rp.jurusan"
+                                   :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                   :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in uppercase bg-slate-100 text-slate-500 cursor-not-allowed' : 'in uppercase'"
+                                   placeholder="Jurusan (Kosongkan jika SD/SMP)">
                         </div>
                         <div>
                             <label class="lb">Nilai Akhir / IPK</label>
-                            <input type="text" :name="'riwayat_pendidikan[' + index + '][nilai_ipk]'" x-model="rp.nilai_ipk" class="in" placeholder="Nilai / IPK">
+                            <input type="text"
+                                   :name="'riwayat_pendidikan[' + index + '][nilai_ipk]'"
+                                   x-model="rp.nilai_ipk"
+                                   :readonly="rp.jenjang === 'TIDAK SEKOLAH'"
+                                   :class="rp.jenjang === 'TIDAK SEKOLAH' ? 'in bg-slate-100 text-slate-500 cursor-not-allowed' : 'in'"
+                                   placeholder="Nilai / IPK">
                         </div>
                     </div>
                 </div>
@@ -291,7 +438,6 @@
                 </select>
             </div>
 
-            {{-- Nama pasangan hanya wajib & aktif jika status = KAWIN (tidak mandatory untuk CERAI_HIDUP & CERAI_MATI) --}}
             <div x-show="nikah === 'KAWIN'" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                     <label class="lb">Nama Suami / Istri (Pasangan) <span class="req">*</span></label>
@@ -320,23 +466,22 @@
                 </select>
             </div>
 
-            <!-- Daftar Anak Dinamis -->
             <div class="space-y-4 pt-2" x-show="nikah !== 'BELUM_KAWIN' && anakN > 0" x-cloak>
-                <template x-for="(an, index) in anakList" :key="index">
+                <template x-for="i in anakN" :key="i">
                     <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200">
-                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + (index + 1)"></p>
+                        <p class="text-sm font-semibold text-blue-900" x-text="'Anak ke-' + i"></p>
                         <div>
                             <label class="lb">Nama lengkap anak <span class="req">*</span></label>
-                            <input type="text" :name="'anak[' + (index + 1) + '][nama_anak]'" x-model="an.nama_anak" required class="in uppercase" placeholder="Nama Lengkap Anak">
+                            <input type="text" :name="'anak[' + i + '][nama_anak]'" x-model="anakList[i-1].nama_anak" required class="in uppercase" placeholder="Nama Lengkap Anak">
                         </div>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
                                 <label class="lb">Tanggal lahir</label>
-                                <input type="date" :name="'anak[' + (index + 1) + '][tgl_lahir_anak]'" x-model="an.tgl_lahir_anak" class="in">
+                                <input type="date" :name="'anak[' + i + '][tgl_lahir_anak]'" x-model="anakList[i-1].tgl_lahir_anak" class="in">
                             </div>
                             <div>
                                 <label class="lb">Pendidikan / Status</label>
-                                <select :name="'anak[' + (index + 1) + '][pendidikan_anak]'" class="in" x-model="an.pendidikan_anak">
+                                <select :name="'anak[' + i + '][pendidikan_anak]'" class="in" x-model="anakList[i-1].pendidikan_anak">
                                     @foreach ([
                                         'BELUM SEKOLAH'=>'Belum sekolah',
                                         'TK'=>'TK / PAUD',
@@ -372,7 +517,7 @@
                 <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200 relative">
                     <div class="flex justify-between items-center">
                         <span class="text-xs font-bold uppercase tracking-wider text-slate-400" x-text="'Riwayat Sukun #' + (index + 1)"></span>
-                        <button type="button" x-show="sukunList.length > 1" @click="sukunList.splice(index, 1)" class="text-xs font-medium text-red-500 hover:text-red-700 hover:underline">
+                        <button type="button" @click="hapusItem(sukunList, index, { bagian: '', jabatan: '', tahun_mulai: '', tahun_selesai: '' })" class="text-xs font-medium text-red-500 hover:text-red-700 hover:underline">
                             Hapus
                         </button>
                     </div>
@@ -392,8 +537,8 @@
                             <input type="number" min="1970" max="{{ now()->year }}" :name="'riwayat_sukun[' + index + '][tahun_mulai]'" x-model="rw.tahun_mulai" class="in" placeholder="Contoh: 2019">
                         </div>
                         <div>
-                            <label class="lb">Tahun Selesai / Sekarang</label>
-                            <input type="text" :name="'riwayat_sukun[' + index + '][tahun_selesai]'" x-model="rw.tahun_selesai" class="in" placeholder="Contoh: 2022 / Sekarang">
+                            <label class="lb">Tahun Selesai</label>
+                            <input type="number" min="1970" max="{{ now()->year + 5 }}" :name="'riwayat_sukun[' + index + '][tahun_selesai]'" x-model="rw.tahun_selesai" class="in" placeholder="Contoh: 2022 (Kosongkan jika masih aktif)">
                         </div>
                     </div>
                 </div>
@@ -416,7 +561,7 @@
                 <div class="sb space-y-3 bg-white p-4 rounded-lg border border-slate-200 relative">
                     <div class="flex justify-between items-center">
                         <span class="text-xs font-bold uppercase tracking-wider text-slate-400" x-text="'Pengalaman Luar #' + (index + 1)"></span>
-                        <button type="button" x-show="luarList.length > 1" @click="luarList.splice(index, 1)" class="text-xs font-medium text-red-500 hover:text-red-700 hover:underline">
+                        <button type="button" @click="hapusItem(luarList, index, { perusahaan: '', jabatan: '', tahun_masuk: '', tahun_keluar: '' })" class="text-xs font-medium text-red-500 hover:text-red-700 hover:underline">
                             Hapus
                         </button>
                     </div>
@@ -452,12 +597,13 @@
                 <div>
                     <label class="lb">Nomor Rekening (9-10 digit BNI / 15 digit BRI)</label>
                     <input type="text" name="no_rekening"
-                           value="{{ old('no_rekening', $karyawan->no_rekening) }}"
-                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 15)"
+                           x-model="rek"
+                           @input="rek = rek.replace(/\D/g, '').slice(0, 15)"
                            maxlength="15" inputmode="numeric"
                            class="in font-mono" placeholder="BNI (9-10 digit) / BRI (15 digit)"
                            pattern="^(\d{9,10}|\d{15})?$"
                            title="Kosongkan, atau masukkan 9-10 angka (BNI) / 15 angka (BRI)">
+                    <p class="hint" :class="bank().w" x-text="bank().p"></p>
                 </div>
                 <div>
                     <label class="lb">Atas Nama Rekening</label>
@@ -469,11 +615,11 @@
                 <span class="lb text-blue-900">Jika gaji belum dilakukan via transfer, apakah bersedia untuk dilakukan penggajian via transfer? <span class="req">*</span></span>
                 <div class="mt-3 flex items-center gap-6">
                     <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                        <input type="radio" name="bersedia_transfer" value="YA" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) == 'YA') class="h-4 w-4 text-blue-600">
+                        <input type="radio" name="bersedia_transfer" value="YA" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) === 'YA') required class="h-4 w-4 text-blue-600">
                         Iya, Bersedia
                     </label>
                     <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                        <input type="radio" name="bersedia_transfer" value="TIDAK" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) == 'TIDAK') class="h-4 w-4 text-blue-600">
+                        <input type="radio" name="bersedia_transfer" value="TIDAK" @checked(old('bersedia_transfer', $karyawan->bersedia_transfer) === 'TIDAK') class="h-4 w-4 text-blue-600">
                         Tidak
                     </label>
                 </div>
@@ -503,12 +649,145 @@
         </div>
 
         <div class="pt-4">
-            <button type="submit" class="w-full rounded-lg bg-blue-600 px-5 py-3.5 text-base font-bold text-white hover:bg-blue-700 transition shadow">
-                Simpan Seluruh Perubahan Data Karyawan
+            <button type="submit" :disabled="isSubmitting"
+                    class="w-full rounded-lg bg-blue-600 px-5 py-3.5 text-base font-bold text-white hover:bg-blue-700 transition shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                    x-text="isSubmitting ? 'Sedang Menyimpan...' : 'Simpan Seluruh Perubahan Data Karyawan'">
             </button>
         </div>
     </form>
 </div>
+
+@verbatim
+<script>
+function editKaryawanForm(initialData) {
+    return Object.assign({}, initialData, {
+        init() {
+            this.rek = String(this.rek || '').replace(/\D/g, '').slice(0, 15);
+            this.normalisasiArray();
+
+            if (this.nikah === 'BELUM_KAWIN') {
+                this.anakN = 0;
+                this.anakList = [];
+            } else {
+                this.siapkanAnak();
+            }
+
+            this.$watch('anakN', () => {
+                if (this.nikah !== 'BELUM_KAWIN') {
+                    this.siapkanAnak();
+                }
+            });
+
+            this.$watch('nikah', (val) => {
+                if (val === 'BELUM_KAWIN') {
+                    this.anakN = 0;
+                    this.anakList = [];
+                } else {
+                    this.siapkanAnak();
+                }
+            });
+
+            const jabatanLama = String(this.jabatanDipilih || '').trim();
+            if (jabatanLama.toUpperCase().startsWith('RM')) {
+                this.distribusiJabatan = 'RM';
+                if (/REGIONAL\s*1/i.test(jabatanLama)) this.rmRegional = 'Regional 1';
+                else if (/REGIONAL\s*2/i.test(jabatanLama)) this.rmRegional = 'Regional 2';
+                else if (/REGIONAL\s*3/i.test(jabatanLama)) this.rmRegional = 'Regional 3';
+            } else if (jabatanLama.toUpperCase().startsWith('AM ')) {
+                this.distribusiJabatan = 'AM';
+                this.amWilayah = jabatanLama.replace(/^AM\s+/i, '').trim();
+            } else if (this.tipe === 'DISTRIBUSI') {
+                this.distribusiJabatan = jabatanLama;
+            }
+
+            this.$nextTick(() => {
+                const selectUnit = document.getElementById('unit_organisasi_id');
+                if (selectUnit && selectUnit.selectedOptions.length > 0) {
+                    this.unitNama = selectUnit.selectedOptions[0].text.trim();
+                }
+            });
+        },
+
+        normalisasiArray() {
+            if (!Array.isArray(this.anakList)) this.anakList = Object.values(this.anakList || {});
+            if (!Array.isArray(this.pendList)) this.pendList = Object.values(this.pendList || {});
+            if (!Array.isArray(this.sukunList)) this.sukunList = Object.values(this.sukunList || {});
+            if (!Array.isArray(this.luarList)) this.luarList = Object.values(this.luarList || {});
+
+            if (this.pendList.length === 0) {
+                this.pendList = [{ jenjang: 'SD', nama_instansi: '', jurusan: '', nilai_ipk: '' }];
+            }
+            this.pendList.forEach((rp) => {
+                if (rp.jenjang === 'TIDAK SEKOLAH') {
+                    rp.nama_instansi = 'TIDAK SEKOLAH';
+                    rp.jurusan = '';
+                    rp.nilai_ipk = '';
+                }
+            });
+            if (this.sukunList.length === 0) {
+                this.sukunList = [{ bagian: '', jabatan: '', tahun_mulai: '', tahun_selesai: '' }];
+            }
+            if (this.luarList.length === 0) {
+                this.luarList = [{ perusahaan: '', jabatan: '', tahun_masuk: '', tahun_keluar: '' }];
+            }
+        },
+
+        onJenjangChange(rp) {
+            if (rp.jenjang === 'TIDAK SEKOLAH') {
+                rp.nama_instansi = 'TIDAK SEKOLAH';
+                rp.jurusan = '';
+                rp.nilai_ipk = '';
+            } else if (rp.nama_instansi === 'TIDAK SEKOLAH') {
+                rp.nama_instansi = '';
+            }
+        },
+
+        hapusItem(list, index, emptyTemplate) {
+            if (list.length > 1) {
+                list.splice(index, 1);
+            } else {
+                Object.assign(list[0], emptyTemplate);
+            }
+        },
+
+        siapkanAnak() {
+            if (!Array.isArray(this.anakList)) this.anakList = [];
+            const jumlah = Math.min(10, Math.max(0, Number(this.anakN) || 0));
+            while (this.anakList.length < jumlah) {
+                this.anakList.push({ nama_anak: '', tgl_lahir_anak: '', pendidikan_anak: 'BELUM SEKOLAH' });
+            }
+            if (this.anakList.length > jumlah) {
+                this.anakList = this.anakList.slice(0, jumlah);
+            }
+        },
+
+        isSatpam() {
+            const unit = String(this.unitNama || '').toLowerCase();
+            return unit.includes('satpam') || unit.includes('security');
+        },
+
+        finalJabatanDistribusi() {
+            if (this.distribusiJabatan === 'RM') {
+                return this.rmRegional ? 'RM ' + this.rmRegional : 'RM';
+            }
+            if (this.distribusiJabatan === 'AM') {
+                return this.amWilayah ? 'AM ' + this.amWilayah : 'AM';
+            }
+            return this.distribusiJabatan || '';
+        },
+
+        bank() {
+            const jumlahDigit = String(this.rek || '').replace(/\D/g, '').length;
+            if (jumlahDigit === 15) return { w: 'text-emerald-700', p: 'Terdeteksi BRI (15 angka)' };
+            if (jumlahDigit === 10) return { w: 'text-emerald-700', p: 'Terdeteksi BNI (10 angka)' };
+            if (jumlahDigit === 9) return { w: 'text-emerald-700', p: 'Terdeteksi BNI Taplus Lama (9 angka)' };
+            if (jumlahDigit === 0) return { w: 'text-slate-500', p: 'Opsional. Boleh dikosongkan.' };
+            return { w: 'text-red-600', p: 'Jumlah angka saat ini ' + jumlahDigit + ' (wajib 15 untuk BRI, 9-10 untuk BNI)' };
+        }
+    });
+}
+</script>
+@endverbatim
 
 </body>
 </html>

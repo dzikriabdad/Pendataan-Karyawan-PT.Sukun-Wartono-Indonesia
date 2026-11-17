@@ -490,7 +490,7 @@ foreach ($errors->keys() as $k) {
                             @change="if (distribusiJabatan !== 'RM') rmRegional = ''; if (distribusiJabatan !== 'AM') amWilayah = '';"
                             :disabled="tipe !== 'DISTRIBUSI'">
                         <option value="">-- Pilih Jabatan Distribusi --</option>
-                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'SS', 'AM', 'RM'] as $jbtDist)
+                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO','ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
                             <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
                         @endforeach
                     </select>

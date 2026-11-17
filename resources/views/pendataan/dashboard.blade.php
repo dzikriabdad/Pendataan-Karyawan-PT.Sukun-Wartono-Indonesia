@@ -118,7 +118,11 @@
             <!-- Form Filter & Export (GET) -->
             <form method="GET" action="{{ url()->current() }}" class="flex flex-col sm:flex-row flex-wrap gap-3 w-full md:w-auto">
                 <div>
-                    <input type="text" name="search" value="{{ request('search') }}" placeholder="Cari NIK / Nama..." class="w-full sm:w-48 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                    <input type="text"
+                           name="search"
+                           value="{{ request('search') }}"
+                           placeholder="Cari NIK / Nama / No. HP..."
+                           class="w-full sm:w-56 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none">
                 </div>
 
                 @if(isset($mode) && $mode === 'HRD')
@@ -162,7 +166,7 @@
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
                     <a href="{{ route('pendataan.template') }}" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition">
-                         Unduh Template Import
+                        Unduh Template Import
                     </a>
 
                     <form action="{{ route('pendataan.import') }}" method="POST" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
@@ -187,6 +191,7 @@
                         <th class="px-4 py-3">No</th>
                         <th class="px-4 py-3">NIK</th>
                         <th class="px-4 py-3">Nama Lengkap</th>
+                        <th class="px-4 py-3">No. HP / WA</th>
                         <th class="px-4 py-3">Departemen</th>
                         <th class="px-4 py-3">Unit</th>
                         
@@ -218,6 +223,10 @@
                                     </span>
                                 @endif
                                 <div class="text-xs font-normal text-slate-500">Lahir: {{ $item->tgl_lahir ?? '-' }}</div>
+                            </td>
+                            {{-- Sesuaikan nama kolom nomor telepon jika di DB berbeda (misal: no_telepon / no_wa) --}}
+                            <td class="px-4 py-3 font-mono text-xs text-slate-700">
+                                {{ $item->no_hp ?? $item->no_telepon ?? '-' }}
                             </td>
                             <td class="px-4 py-3">{{ $item->nama_departemen ?? '-' }}</td>
                             <td class="px-4 py-3">{{ $item->nama_unit ?? '-' }}</td>
@@ -254,7 +263,7 @@
                     @empty
                         <tr>
                             @php
-                                $colSpan = 6;
+                                $colSpan = 7;
                                 if(isset($mode) && $mode === 'HRD') $colSpan++;
                                 if(!empty($canDelete)) $colSpan++;
                             @endphp
