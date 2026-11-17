@@ -60,6 +60,17 @@ Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR,HRDPUSAT'])->group
         PendataanController::class,
         'destroy',
     ])->name('pendataan.destroy');
+
+    // Route Import & Download Template Excel HRD
+    Route::post('/hrd/karyawan/import', [
+        PendataanController::class,
+        'importExcel',
+    ])->name('pendataan.import');
+
+    Route::get('/hrd/karyawan/template', [
+        PendataanController::class,
+        'downloadTemplate',
+    ])->name('pendataan.template');
 });
 
 // Route khusus Dashboard Atasan / Kepala Bagian (Tanpa akses ke detail karyawan)
@@ -80,6 +91,3 @@ Route::put('/pendataan/update/{token}', [
     PendataanController::class,
     'updateByToken',
 ])->name('pendataan.update.token');
-Route::post('/hrd/karyawan/import', [PendataanController::class, 'importExcel'])->name('pendataan.import');
-Route::get('/hrd/karyawan/template', [PendataanController::class, 'downloadTemplate'])->name('pendataan.template');
-Route::get('/pendataan/template-import', [PendataanController::class, 'downloadTemplate'])->name('pendataan.template');
