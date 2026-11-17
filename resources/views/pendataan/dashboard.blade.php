@@ -162,21 +162,27 @@
         @if(isset($mode) && $mode === 'HRD')
             <div class="border-t border-slate-200 pt-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                 <div class="text-xs text-slate-500">
-                    Import massal menggunakan template Excel (Sheet <code class="bg-slate-100 px-1 py-0.5 rounded font-semibold text-slate-700">DATA</code>). NIK yang sudah terdaftar akan dilewati otomatis.
+                    @if(!empty($canImport))
+                        Import massal menggunakan template Excel (Sheet <code class="bg-slate-100 px-1 py-0.5 rounded font-semibold text-slate-700">DATA</code>). NIK yang sudah terdaftar akan dilewati otomatis.
+                    @else
+                        Unduh template Excel (Sheet <code class="bg-slate-100 px-1 py-0.5 rounded font-semibold text-slate-700">DATA</code>) sebagai acuan format pengisian data karyawan.
+                    @endif
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
                     <a href="{{ route('pendataan.template') }}" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition">
                         Unduh Template Import
                     </a>
 
-                    <form action="{{ route('pendataan.import') }}" method="POST" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
-                        @csrf
-                        <input type="file" name="file_excel" accept=".xlsx,.xls" required
-                               class="text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-blue-700 hover:file:bg-blue-100">
-                        <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition">
-                            Import Excel
-                        </button>
-                    </form>
+                    @if(!empty($canImport))
+                        <form action="{{ route('pendataan.import') }}" method="POST" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
+                            @csrf
+                            <input type="file" name="file_excel" accept=".xlsx,.xls" required
+                                   class="text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-blue-700 hover:file:bg-blue-100">
+                            <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition">
+                                Import Excel
+                            </button>
+                        </form>
+                    @endif
                 </div>
             </div>
         @endif

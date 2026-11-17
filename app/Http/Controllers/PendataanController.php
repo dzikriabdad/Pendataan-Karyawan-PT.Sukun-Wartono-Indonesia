@@ -37,6 +37,18 @@ class PendataanController extends Controller
         return $this->currentRole() === 'HRDPUSAT';
     }
 
+    private function canImportExcel(): bool
+    {
+        $role = str_replace('_', '', $this->currentRole());
+        $nama = strtolower(trim((string) (session('pengguna_nama') ?? session('username') ?? '')));
+
+        if ($role === 'ADMINHR' || $nama === 'adminhr') {
+            return false;
+        }
+
+        return in_array($this->currentRole(), ['HRDPUSAT', 'HRD'], true);
+    }
+
     private function ensureHrdAccess(string $message = 'Anda tidak memiliki akses ke halaman ini.'): void
     {
         if (! in_array($this->currentRole(), ['HRDPUSAT', 'ADMIN_HR', 'HRD'], true)) {
@@ -1757,7 +1769,9 @@ class PendataanController extends Controller
 
     public function importExcel(Request $request)
     {
-        $this->ensureHrdAccess('Anda tidak memiliki akses untuk melakukan import data.');
+        if (! $this->canImportExcel()) {
+            abort(403, 'Anda tidak memiliki akses untuk melakukan import data.');
+        }
 
         $request->validate([
             'file_excel' => 'required|file|mimes:xlsx,xls|max:10240',
@@ -3085,6 +3099,7 @@ class PendataanController extends Controller
             'judul'          => 'Dashboard HRD',
             'mode'           => 'HRD',
             'canDelete'      => $this->isHrdPusat(),
+            'canImport'      => $this->canImportExcel(),
             'totalData'      => $totalData,
             'listDepartemen' => DB::table('departemen')->orderBy('nama_departemen')->pluck('nama_departemen'),
         ]);
@@ -3112,6 +3127,7 @@ class PendataanController extends Controller
             'judul'          => 'Dashboard Kepala Bagian',
             'mode'           => 'ATASAN',
             'canDelete'      => $this->isHrdPusat(),
+            'canImport'      => $this->canImportExcel(),
             'totalData'      => $totalData,
             'listDepartemen' => DB::table('departemen')->orderBy('nama_departemen')->pluck('nama_departemen'),
         ]);

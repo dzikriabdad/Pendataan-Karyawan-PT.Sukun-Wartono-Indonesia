@@ -423,9 +423,10 @@ foreach ($errors->keys() as $k) {
                                             $namaUnitUp = strtoupper(trim($u->nama_unit));
                                             $isPerwakilan = str_starts_with($namaUnitUp, 'PERWAKILAN') || str_contains($namaUnitUp, 'PERWAKILAN');
                                             $isRegional = str_starts_with($namaUnitUp, 'REGIONAL') || str_contains($namaUnitUp, 'REGIONAL');
+                                            $isAm = str_starts_with($namaUnitUp, 'AM ') || $namaUnitUp === 'AM';
                                         @endphp
 
-                                        @if (strtoupper($dep->nama_departemen) === 'DISTRIBUSI' && ($isPerwakilan || $isRegional))
+                                        @if (strtoupper(trim($dep->nama_departemen)) === 'DISTRIBUSI' && ($isPerwakilan || $isRegional || $isAm))
                                             @continue
                                         @endif
 
@@ -490,7 +491,7 @@ foreach ($errors->keys() as $k) {
                             @change="if (distribusiJabatan !== 'RM') rmRegional = ''; if (distribusiJabatan !== 'AM') amWilayah = '';"
                             :disabled="tipe !== 'DISTRIBUSI'">
                         <option value="">-- Pilih Jabatan Distribusi --</option>
-                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO','ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
+                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
                             <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
                         @endforeach
                     </select>
@@ -946,8 +947,13 @@ function formKaryawan(initialData) {
 
             this.$nextTick(() => {
                 const selectUnit = document.getElementById('unit_organisasi_id');
-                if (selectUnit && selectUnit.selectedOptions.length > 0) {
-                    this.unitNama = selectUnit.selectedOptions[0].text.trim();
+                if (selectUnit) {
+                    if (this.unitId && !Array.from(selectUnit.options).some(opt => opt.value == this.unitId)) {
+                        this.unitId = '';
+                        this.unitNama = '';
+                    } else if (selectUnit.selectedOptions.length > 0) {
+                        this.unitNama = selectUnit.selectedOptions[0].text.trim();
+                    }
                 }
             });
         },

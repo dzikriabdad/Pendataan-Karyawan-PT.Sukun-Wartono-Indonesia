@@ -33,7 +33,7 @@ Route::post('/logout', [
     'logout',
 ])->name('logout');
 
-// Route khusus Dashboard & Aksi Admin HR / HRD Pusat / Superadmin (Termasuk Hapus, Detail, & Edit HRD)
+// Route khusus Dashboard & Aksi Admin HR / HRD Pusat / Superadmin
 Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR,HRDPUSAT'])->group(function () {
     Route::get('/hrd/dashboard', [
         PendataanController::class,
@@ -55,22 +55,25 @@ Route::middleware(['cek.login', 'cek.role:SUPERADMIN,ADMIN_HR,HRDPUSAT'])->group
         'updateHrd',
     ])->name('hrd.karyawan.update');
 
-    // Route untuk hapus data karyawan (bisa diakses oleh HRDPUSAT dan SUPERADMIN)
+    // Route untuk hapus data karyawan
     Route::delete('/hrd/karyawan/{id}', [
         PendataanController::class,
         'destroy',
     ])->name('pendataan.destroy');
 
-    // Route Import & Download Template Excel HRD
-    Route::post('/hrd/karyawan/import', [
-        PendataanController::class,
-        'importExcel',
-    ])->name('pendataan.import');
-
+    // Download Template Excel (ADMIN_HR tetap bisa akses)
     Route::get('/hrd/karyawan/template', [
         PendataanController::class,
         'downloadTemplate',
     ])->name('pendataan.template');
+});
+
+// Route khusus HRD Pusat & Superadmin (Import Excel dicabut dari ADMIN_HR)
+Route::middleware(['cek.login', 'cek.role:SUPERADMIN,HRDPUSAT'])->group(function () {
+    Route::post('/hrd/karyawan/import', [
+        PendataanController::class,
+        'importExcel',
+    ])->name('pendataan.import');
 });
 
 // Route khusus Dashboard Atasan / Kepala Bagian (Tanpa akses ke detail karyawan)
