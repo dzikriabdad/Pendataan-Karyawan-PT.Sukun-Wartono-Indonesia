@@ -81,7 +81,17 @@ Route::middleware(['cek.login', 'cek.role:ATASAN'])->group(function () {
     ])->name('atasan.dashboard');
 });
 
-// Route untuk Edit Mandiri oleh Karyawan (menggunakan token unik) tanpa perlu login
+// Route untuk Edit Mandiri oleh Karyawan (tanpa share token manual)
+Route::get('/pendataan/ubah-data', [
+    PendataanController::class,
+    'showMandiriForm',
+])->name('pendataan.ubah-data');
+
+Route::post('/pendataan/ubah-data', [
+    PendataanController::class,
+    'verifyMandiri',
+])->name('pendataan.ubah-data.verify');
+
 Route::get('/pendataan/edit/{token}', [
     PendataanController::class,
     'editByToken',

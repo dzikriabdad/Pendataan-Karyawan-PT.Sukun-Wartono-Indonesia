@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
@@ -1293,6 +1295,128 @@ class PendataanController extends Controller
         });
 
         return redirect('/hrd/dashboard')->with('sukses', 'Data karyawan berhasil dihapus.');
+    }
+
+    public function showMandiriForm()
+    {
+        return view('pendataan.mandiri');
+    }
+
+    public function verifyMandiri(Request $request)
+    {
+        $throttleKey = 'mandiri-verify|' . $request->ip();
+
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            $minutes = ceil($seconds / 60);
+
+            return back()->withInput()->withErrors([
+                'auth' => "Terlalu banyak percobaan. Silakan coba lagi dalam {$minutes} menit.",
+            ]);
+        }
+
+        // Bersihkan NIK dari karakter spasi/tanda baca
+        if ($request->has('nik')) {
+            $request->merge([
+                'nik' => preg_replace('/\D/', '', (string) $request->input('nik')),
+            ]);
+        }
+
+        $request->validate([
+            'nik'             => 'required|digits:16',
+            'nama_ibu'        => 'required|string|min:2|max:150',
+            'tgl_masuk_bulan' => 'required|integer|between:1,12',
+            'tgl_masuk_tahun' => 'required|integer|between:1950,' . now()->year,
+        ], [
+            'nik.required'             => 'NIK wajib diisi.',
+            'nik.digits'               => 'NIK harus 16 digit angka.',
+            'nama_ibu.required'        => 'Nama ibu kandung wajib diisi.',
+            'tgl_masuk_bulan.required' => 'Bulan masuk wajib dipilih.',
+            'tgl_masuk_bulan.between'  => 'Bulan masuk tidak valid.',
+            'tgl_masuk_tahun.required' => 'Tahun masuk wajib diisi.',
+            'tgl_masuk_tahun.between'  => 'Tahun masuk tidak valid.',
+        ]);
+
+        $nik = trim((string) $request->input('nik'));
+        $karyawan = DB::table('karyawan')->where('nik_ktp', $nik)->first();
+
+        $authFailed = false;
+
+        if (! $karyawan) {
+            $authFailed = true;
+        } else {
+            // 1. Verifikasi Bulan & Tahun Masuk Kerja
+            if (empty($karyawan->tgl_masuk_kerja)) {
+                $authFailed = true;
+            } else {
+                $tglMasukTime = strtotime($karyawan->tgl_masuk_kerja);
+                $dbMonth = (int) date('n', $tglMasukTime);
+                $dbYear  = (int) date('Y', $tglMasukTime);
+
+                $reqMonth = (int) $request->input('tgl_masuk_bulan');
+                $reqYear  = (int) $request->input('tgl_masuk_tahun');
+
+                if ($dbMonth !== $reqMonth || $dbYear !== $reqYear) {
+                    $authFailed = true;
+                }
+            }
+
+            // 2. Verifikasi Nama Ibu Kandung
+            if (! $authFailed) {
+                if (! $this->matchNamaIbu((string) $request->input('nama_ibu'), (string) ($karyawan->nama_ibu ?? ''))) {
+                    $authFailed = true;
+                }
+            }
+        }
+
+        if ($authFailed) {
+            RateLimiter::hit($throttleKey, 900); // 15 menit
+            $attemptsLeft = RateLimiter::remaining($throttleKey, 5);
+
+            return back()->withInput()->withErrors([
+                'auth' => "Data tidak sesuai. Silakan periksa kembali data Anda. (Sisa: {$attemptsLeft})",
+            ]);
+        }
+
+        RateLimiter::clear($throttleKey);
+
+        $token = $karyawan->token;
+        if (empty($token)) {
+            $token = Str::random(40);
+            DB::table('karyawan')->where('id', $karyawan->id)->update(['token' => $token]);
+        }
+
+        return redirect()->route('pendataan.edit.token', $token)
+            ->with('sukses', 'Verifikasi identitas berhasil! Silakan periksa atau lengkapi data Anda di bawah ini.');
+    }
+
+    private function matchNamaIbu(string $input, string $db): bool
+    {
+        $normalize = function (string $str): string {
+            $str = strtolower(trim($str));
+            // Hapus gelar / sebutan umum seperti hj, hajjah, ibu, ny, alm, st
+            $str = preg_replace('/\b(hj|hajjah|hajah|ny|ibu|alm|almarhumah|st)\b\.?/i', '', $str);
+            // Hapus karakter selain huruf dan angka
+            return preg_replace('/[^a-z0-9]/', '', $str);
+        };
+
+        $cleanInput = $normalize($input);
+        $cleanDb    = $normalize($db);
+
+        if ($cleanInput === '' || $cleanDb === '') {
+            return false;
+        }
+
+        if ($cleanInput === $cleanDb) {
+            return true;
+        }
+
+        // Toleransi jika salah satu string memuat string lainnya (minimal 4 karakter)
+        if (strlen($cleanInput) >= 4 && (str_contains($cleanDb, $cleanInput) || str_contains($cleanInput, $cleanDb))) {
+            return true;
+        }
+
+        return false;
     }
 
     public function editByToken($token)
