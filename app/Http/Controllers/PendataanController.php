@@ -87,7 +87,7 @@ class PendataanController extends Controller
         }
 
         if ($request->has('no_bpjs_kesehatan')) {
-            $cleanBpjsKes = preg_replace('/[^0-9]/', '', (string) $request->input('no_bpjs_kesehatan'));
+            $cleanBpjsKes = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', (string) $request->input('no_bpjs_kesehatan')));
             $merged['no_bpjs_kesehatan'] = $cleanBpjsKes !== '' ? $cleanBpjsKes : null;
         }
 
@@ -226,9 +226,7 @@ class PendataanController extends Controller
     private function statusVerifikasiSqlExpression(): string
     {
         return "CASE WHEN
-            TRIM(COALESCE(karyawan.nip, '')) NOT IN ('', '-')
-            AND UPPER(TRIM(COALESCE(karyawan.nip, ''))) NOT LIKE 'AUTO-%'
-            AND TRIM(COALESCE(karyawan.no_wa, '')) NOT IN ('', '-')
+            TRIM(COALESCE(karyawan.no_wa, '')) NOT IN ('', '-')
             AND EXISTS (
                 SELECT 1 FROM alamat a
                 WHERE a.karyawan_id = karyawan.id
@@ -434,9 +432,44 @@ class PendataanController extends Controller
         return $dataHeaders;
     }
 
+    private function validatePenempatanByTipe(Request $request, ?object $existing = null): void
+    {
+        $tipe = $request->filled('tipe_karyawan')
+            ? $request->input('tipe_karyawan')
+            : ($existing->tipe_karyawan ?? null);
+
+        if ($tipe !== 'DISTRIBUSI' && empty($request->input('unit_organisasi_id'))) {
+            throw ValidationException::withMessages([
+                'unit_organisasi_id' => 'Bagian / unit kerja wajib dipilih.',
+            ]);
+        }
+
+        if ($tipe === 'BORONG' && empty($request->input('jabatan_borong_id'))) {
+            throw ValidationException::withMessages([
+                'jabatan_borong_id' => 'Jenis pekerjaan borong wajib dipilih.',
+            ]);
+        }
+
+        if ($tipe === 'DISTRIBUSI') {
+            $jabatan = trim((string) $request->input('nama_jabatan', ''));
+            if ($jabatan === '') {
+                throw ValidationException::withMessages([
+                    'nama_jabatan' => 'Jabatan distribusi wajib dipilih.',
+                ]);
+            }
+
+            $jabUpper = strtoupper($jabatan);
+            if (! str_starts_with($jabUpper, 'RM') && ! str_starts_with($jabUpper, 'AM') && empty($request->input('kota_perwakilan_id'))) {
+                throw ValidationException::withMessages([
+                    'kota_perwakilan_id' => 'Kota perwakilan / cabang wajib dipilih.',
+                ]);
+            }
+        }
+    }
+
     private function resolvePenempatan(Request $request, ?object $existing = null): array
     {
-        $tipe         = $request->input('tipe_karyawan', $existing->tipe_karyawan ?? null);
+        $tipe         = $request->filled('tipe_karyawan') ? $request->input('tipe_karyawan') : ($existing->tipe_karyawan ?? null);
         $unitId       = $request->filled('unit_organisasi_id') ? (int) $request->input('unit_organisasi_id') : ($existing->unit_organisasi_id ?? null);
         $departemenId = $existing->departemen_id ?? null;
         $namaJabatan  = $request->filled('nama_jabatan')
@@ -504,11 +537,15 @@ class PendataanController extends Controller
             } elseif ($kotaId) {
                 $namaKota = DB::table('kota_perwakilan')->where('id', $kotaId)->value('nama_kota');
                 if ($namaKota) {
+                    $cleanKota       = strtoupper(trim((string) $namaKota));
+                    $compactKota     = str_replace(' ', '', $cleanKota);
+
                     $unitId = DB::table('unit_organisasi')
                         ->when($departemenId, fn ($q) => $q->where('departemen_id', $departemenId))
-                        ->where(function ($q) use ($namaKota) {
-                            $q->where('nama_unit', 'like', 'PERWAKILAN ' . $namaKota)
-                                ->orWhere('nama_unit', 'like', '%' . $namaKota . '%');
+                        ->where(function ($q) use ($cleanKota, $compactKota) {
+                            $q->whereRaw('UPPER(TRIM(nama_unit)) = ?', ['PERWAKILAN ' . $cleanKota])
+                                ->orWhere('nama_unit', 'like', '%' . $cleanKota . '%')
+                                ->orWhereRaw("REPLACE(UPPER(nama_unit), ' ', '') LIKE ?", ['%' . $compactKota . '%']);
                         })
                         ->where('nama_unit', 'not like', '%PUSAT%')
                         ->value('id');
@@ -517,7 +554,7 @@ class PendataanController extends Controller
                         try {
                             $unitId = DB::table('unit_organisasi')->insertGetId([
                                 'departemen_id' => $departemenId,
-                                'nama_unit'     => 'PERWAKILAN ' . strtoupper($namaKota),
+                                'nama_unit'     => 'PERWAKILAN ' . $cleanKota,
                             ]);
                         } catch (\Throwable $th) {
                         }
@@ -634,7 +671,7 @@ class PendataanController extends Controller
             'golongan_darah'          => 'nullable|string|max:5',
             'disabilitas'             => 'nullable|string|max:100',
             'golongan_id'             => 'nullable|exists:golongan,id',
-            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_kesehatan'       => 'nullable|alpha_num|max:30',
             'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
             'npwp'                    => 'nullable|string|max:50',
             'no_anggota_koperasi'     => 'nullable|string|max:50',
@@ -660,7 +697,7 @@ class PendataanController extends Controller
             'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
             'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
             'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'          => 'Nomor BPJS Kesehatan harus angka.',
+            'no_bpjs_kesehatan.alpha_num'               => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
             'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
             'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
             'bersedia_transfer.required'                => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
@@ -673,17 +710,7 @@ class PendataanController extends Controller
             'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
         ]);
 
-        if ($data['tipe_karyawan'] !== 'DISTRIBUSI' && empty($data['unit_organisasi_id'])) {
-            throw ValidationException::withMessages([
-                'unit_organisasi_id' => 'Bagian / unit kerja wajib dipilih.',
-            ]);
-        }
-
-        if ($data['tipe_karyawan'] === 'BORONG' && empty($data['jabatan_borong_id'])) {
-            throw ValidationException::withMessages([
-                'jabatan_borong_id' => 'Jenis pekerjaan borong wajib dipilih.',
-            ]);
-        }
+        $this->validatePenempatanByTipe($request);
 
         if (DB::table('karyawan')->where('nik_ktp', $data['nik_ktp'])->exists()) {
             return redirect()->route('pendataan.create')->withErrors([
@@ -1006,12 +1033,12 @@ class PendataanController extends Controller
             ],
             'nama_pemilik_rekening'   => 'nullable|string|max:150',
             'bersedia_transfer'       => 'required|in:YA,TIDAK',
-            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_kesehatan'       => 'nullable|alpha_num|max:30',
             'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
 
-            'riwayat_pendidikan'                 => 'nullable|array',
-            'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
-            'riwayat_pendidikan.*.nama_instansi' => 'nullable|string|max:150',
+            'riwayat_pendidikan'                 => 'required|array|min:1',
+            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
             'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
             'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
 
@@ -1039,51 +1066,33 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nik_ktp.required'                       => 'Nomor KTP (NIK) wajib diisi.',
-            'nik_ktp.digits'                         => 'Nomor KTP (NIK) harus pas 16 angka.',
-            'nik_ktp.unique'                         => 'Nomor KTP (NIK) sudah digunakan oleh karyawan lain.',
-            'nip.unique'                             => 'NIP sudah terdaftar pada karyawan lain.',
-            'nama_lengkap.required'                  => 'Nama lengkap wajib diisi.',
-            'jenis_kelamin.required'                 => 'Jenis kelamin wajib dipilih.',
-            'tgl_lahir.required'                     => 'Tanggal lahir wajib diisi.',
-            'tgl_lahir.date_format'                  => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
-            'tgl_lahir.after_or_equal'               => 'Tahun lahir tidak valid (minimal tahun 1940).',
-            'tgl_lahir.before_or_equal'              => 'Tanggal lahir tidak boleh melebihi hari ini.',
-            'anak.*.tgl_lahir_anak.date_format'      => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
-            'anak.*.tgl_lahir_anak.before_or_equal'  => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'       => 'Nomor BPJS Kesehatan harus angka.',
-            'no_bpjs_ketenagakerjaan.alpha_num'      => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
-            'alamat_ktp.required'                    => 'Alamat KTP wajib diisi.',
-            'no_rekening.regex'                      => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
-            'bersedia_transfer.required'             => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
-            'nama_ayah.required'                     => 'Nama lengkap ayah kandung wajib diisi.',
-            'nama_ibu.required'                      => 'Nama lengkap ibu kandung wajib diisi.',
-            'status_pernikahan.required'             => 'Status pernikahan wajib dipilih.',
-            'email.email'                            => 'Format alamat email tidak valid.',
+            'nik_ktp.required'                          => 'Nomor KTP (NIK) wajib diisi.',
+            'nik_ktp.digits'                            => 'Nomor KTP (NIK) harus pas 16 angka.',
+            'nik_ktp.unique'                            => 'Nomor KTP (NIK) sudah digunakan oleh karyawan lain.',
+            'nip.unique'                                => 'NIP sudah terdaftar pada karyawan lain.',
+            'nama_lengkap.required'                     => 'Nama lengkap wajib diisi.',
+            'jenis_kelamin.required'                    => 'Jenis kelamin wajib dipilih.',
+            'tgl_lahir.required'                        => 'Tanggal lahir wajib diisi.',
+            'tgl_lahir.date_format'                     => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
+            'tgl_lahir.after_or_equal'                  => 'Tahun lahir tidak valid (minimal tahun 1940).',
+            'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
+            'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
+            'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
+            'no_bpjs_kesehatan.alpha_num'               => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
+            'alamat_ktp.required'                       => 'Alamat KTP wajib diisi.',
+            'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
+            'bersedia_transfer.required'                => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
+            'nama_ayah.required'                        => 'Nama lengkap ayah kandung wajib diisi.',
+            'nama_ibu.required'                         => 'Nama lengkap ibu kandung wajib diisi.',
+            'status_pernikahan.required'                => 'Status pernikahan wajib dipilih.',
+            'email.email'                               => 'Format alamat email tidak valid.',
+            'riwayat_pendidikan.required'               => 'Riwayat pendidikan wajib diisi minimal 1.',
+            'riwayat_pendidikan.*.jenjang.required'     => 'Jenjang pendidikan wajib dipilih.',
+            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
         ]);
 
-        if ($request->input('tipe_karyawan') !== 'DISTRIBUSI' && empty($request->input('unit_organisasi_id'))) {
-            throw ValidationException::withMessages([
-                'unit_organisasi_id' => 'Bagian / unit kerja wajib dipilih.',
-            ]);
-        }
-
-        if ($request->input('tipe_karyawan') === 'BORONG' && empty($request->input('jabatan_borong_id'))) {
-            throw ValidationException::withMessages([
-                'jabatan_borong_id' => 'Jenis pekerjaan borong wajib dipilih.',
-            ]);
-        }
-
-        if ($request->has('riwayat_pendidikan')) {
-            $validPend = array_filter((array) $request->input('riwayat_pendidikan', []), function ($rp) {
-                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-            });
-            if (empty($validPend)) {
-                throw ValidationException::withMessages([
-                    'riwayat_pendidikan' => 'Riwayat pendidikan wajib diisi minimal 1.',
-                ]);
-            }
-        }
+        $this->validatePenempatanByTipe($request, $karyawan);
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
             throw ValidationException::withMessages([
@@ -1176,8 +1185,8 @@ class PendataanController extends Controller
                 'email'                    => $request->input('email', $karyawan->email),
                 'disabilitas'              => $request->input('disabilitas', $karyawan->disabilitas),
                 'status_pernikahan'        => $statusPernikahan,
-                'tipe_karyawan'            => $request->input('tipe_karyawan', $karyawan->tipe_karyawan),
-                'ket_karyawan'             => $request->input('ket_karyawan', $karyawan->ket_karyawan),
+                'tipe_karyawan'            => $request->filled('tipe_karyawan') ? $request->input('tipe_karyawan') : $karyawan->tipe_karyawan,
+                'ket_karyawan'             => $request->filled('ket_karyawan') ? $request->input('ket_karyawan') : $karyawan->ket_karyawan,
                 'tgl_masuk_kerja'          => $tglMasukKerja,
                 'tgl_masuk_hari_diketahui' => $hariDiketahui,
                 'departemen_id'            => $penempatan['departemen_id'],
@@ -1198,31 +1207,29 @@ class PendataanController extends Controller
                 'updated_at'               => now(),
             ];
 
-            if ($request->has('riwayat_pendidikan')) {
-                DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
-                $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
-                    return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-                }));
+            DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
+            $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
+                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
+            }));
 
-                foreach ($listP as $rp) {
-                    DB::table('riwayat_pendidikan')->insert([
-                        'karyawan_id'   => $karyawan->id,
-                        'jenjang'       => strtoupper($rp['jenjang']),
-                        'nama_instansi' => strtoupper($rp['nama_instansi']),
-                        'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
-                        'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
-                        'created_at'    => now(),
-                        'updated_at'    => now(),
-                    ]);
-                }
+            foreach ($listP as $rp) {
+                DB::table('riwayat_pendidikan')->insert([
+                    'karyawan_id'   => $karyawan->id,
+                    'jenjang'       => strtoupper($rp['jenjang']),
+                    'nama_instansi' => strtoupper($rp['nama_instansi']),
+                    'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
+                    'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                    'created_at'    => now(),
+                    'updated_at'    => now(),
+                ]);
+            }
 
-                if (! empty($listP)) {
-                    $lastPend = end($listP);
-                    $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
-                    $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
-                    $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
-                    $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
-                }
+            if (! empty($listP)) {
+                $lastPend = end($listP);
+                $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
+                $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
+                $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
+                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
             }
 
             DB::table('karyawan')->where('id', $karyawan->id)->update($updateKaryawan);
@@ -1487,7 +1494,7 @@ class PendataanController extends Controller
             'disabilitas'             => 'nullable|string|max:100',
             'no_wa'                   => 'nullable|string|max:30',
             'email'                   => 'nullable|email|max:150',
-            'alamat_ktp'              => 'nullable|string',
+            'alamat_ktp'              => 'required|string',
             'alamat_domisili'         => 'nullable|string',
             'tipe_karyawan'           => 'nullable|in:BULANAN,HARIAN,BORONG,DISTRIBUSI',
             'ket_karyawan'            => 'nullable|in:TETAP,HARIAN_LEPAS,KONTRAK',
@@ -1505,7 +1512,7 @@ class PendataanController extends Controller
                 'regex:/^(?:[0-9]{9,10}|[0-9]{15})$/',
             ],
             'nama_pemilik_rekening'   => 'nullable|string|max:150',
-            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_kesehatan'       => 'nullable|alpha_num|max:30',
             'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
             'npwp'                    => 'nullable|string|max:50',
             'no_anggota_koperasi'     => 'nullable|string|max:50',
@@ -1518,9 +1525,9 @@ class PendataanController extends Controller
             'anak.*.tgl_lahir_anak'  => 'nullable|date|date_format:Y-m-d|after_or_equal:1970-01-01|before_or_equal:' . $today,
             'anak.*.pendidikan_anak' => 'nullable|string|max:50',
 
-            'riwayat_pendidikan'                 => 'nullable|array',
-            'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
-            'riwayat_pendidikan.*.nama_instansi' => 'nullable|string|max:150',
+            'riwayat_pendidikan'                 => 'required|array|min:1',
+            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
             'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
             'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
 
@@ -1536,16 +1543,22 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nip.unique'                            => 'NIP sudah terdaftar pada karyawan lain.',
-            'tgl_lahir.date_format'                 => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
-            'tgl_lahir.after_or_equal'              => 'Tahun lahir tidak valid (minimal tahun 1940).',
-            'tgl_lahir.before_or_equal'             => 'Tanggal lahir tidak boleh melebihi hari ini.',
-            'anak.*.tgl_lahir_anak.date_format'     => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
-            'anak.*.tgl_lahir_anak.before_or_equal' => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'      => 'Nomor BPJS Kesehatan harus angka.',
-            'no_bpjs_ketenagakerjaan.alpha_num'     => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
-            'no_rekening.regex'                     => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
+            'nip.unique'                                => 'NIP sudah terdaftar pada karyawan lain.',
+            'alamat_ktp.required'                       => 'Alamat KTP wajib diisi.',
+            'tgl_lahir.date_format'                     => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
+            'tgl_lahir.after_or_equal'                  => 'Tahun lahir tidak valid (minimal tahun 1940).',
+            'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
+            'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
+            'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
+            'no_bpjs_kesehatan.alpha_num'               => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
+            'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
+            'riwayat_pendidikan.required'               => 'Riwayat pendidikan wajib diisi minimal 1.',
+            'riwayat_pendidikan.*.jenjang.required'     => 'Jenjang pendidikan wajib dipilih.',
+            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
         ]);
+
+        $this->validatePenempatanByTipe($request, $karyawan);
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
             throw ValidationException::withMessages([
@@ -1583,11 +1596,7 @@ class PendataanController extends Controller
 
             $noWa = trim((string) ($request->has('no_wa') ? $request->input('no_wa', '') : $karyawan->no_wa));
 
-            $savedAlamatKtp = DB::table('alamat')
-                ->where('karyawan_id', $karyawan->id)
-                ->where('jenis_alamat', 'KTP')
-                ->value('alamat_lengkap');
-            $alamatKtp = trim((string) ($request->input('alamat_ktp') ?: $savedAlamatKtp));
+            $alamatKtp = trim((string) $request->input('alamat_ktp'));
 
             $savedAlamatDomisili = DB::table('alamat')
                 ->where('karyawan_id', $karyawan->id)
@@ -1619,8 +1628,8 @@ class PendataanController extends Controller
                 'nama_ibu'                => strtoupper($request->input('nama_ibu', $karyawan->nama_ibu ?? '')),
                 'status_pernikahan'       => $statusPernikahan,
                 'disabilitas'             => $request->input('disabilitas', $karyawan->disabilitas),
-                'tipe_karyawan'           => $request->input('tipe_karyawan', $karyawan->tipe_karyawan),
-                'ket_karyawan'            => $request->input('ket_karyawan', $karyawan->ket_karyawan),
+                'tipe_karyawan'           => $request->filled('tipe_karyawan') ? $request->input('tipe_karyawan') : $karyawan->tipe_karyawan,
+                'ket_karyawan'            => $request->filled('ket_karyawan') ? $request->input('ket_karyawan') : $karyawan->ket_karyawan,
                 'departemen_id'           => $penempatan['departemen_id'],
                 'unit_organisasi_id'      => $penempatan['unit_organisasi_id'],
                 'nama_jabatan'            => $penempatan['nama_jabatan'],
@@ -1638,41 +1647,37 @@ class PendataanController extends Controller
                 'updated_at'              => now(),
             ];
 
-            if ($request->has('riwayat_pendidikan')) {
-                DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
-                $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
-                    return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-                }));
+            DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
+            $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
+                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
+            }));
 
-                foreach ($listP as $rp) {
-                    DB::table('riwayat_pendidikan')->insert([
-                        'karyawan_id'   => $karyawan->id,
-                        'jenjang'       => strtoupper($rp['jenjang']),
-                        'nama_instansi' => strtoupper($rp['nama_instansi']),
-                        'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
-                        'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
-                        'created_at'    => now(),
-                        'updated_at'    => now(),
-                    ]);
-                }
+            foreach ($listP as $rp) {
+                DB::table('riwayat_pendidikan')->insert([
+                    'karyawan_id'   => $karyawan->id,
+                    'jenjang'       => strtoupper($rp['jenjang']),
+                    'nama_instansi' => strtoupper($rp['nama_instansi']),
+                    'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
+                    'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                    'created_at'    => now(),
+                    'updated_at'    => now(),
+                ]);
+            }
 
-                if (! empty($listP)) {
-                    $lastPend = end($listP);
-                    $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
-                    $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
-                    $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
-                    $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
-                }
+            if (! empty($listP)) {
+                $lastPend = end($listP);
+                $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
+                $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
+                $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
+                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
             }
 
             DB::table('karyawan')->where('id', $karyawan->id)->update($updateKaryawan);
 
-            if ($request->filled('alamat_ktp')) {
-                DB::table('alamat')->updateOrInsert(
-                    ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'KTP'],
-                    ['alamat_lengkap' => $alamatKtp]
-                );
-            }
+            DB::table('alamat')->updateOrInsert(
+                ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'KTP'],
+                ['alamat_lengkap' => $alamatKtp]
+            );
 
             DB::table('alamat')->updateOrInsert(
                 ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'DOMISILI'],
@@ -2100,11 +2105,7 @@ class PendataanController extends Controller
                 $missingFields[] = 'No Rekening (jika diisi harus 9-10 digit untuk BNI atau 15 digit untuk BRI)';
             }
 
-            $bpjsKesCheck = preg_replace('/[^0-9]/', '', $getVal($r, ['BPJS KES', 'NO BPJS KESEHATAN']));
-            if ($bpjsKesCheck !== '' && (strlen($bpjsKesCheck) < 11 || strlen($bpjsKesCheck) > 20)) {
-                $missingFields[] = 'BPJS Kes (jika diisi harus 11-20 digit angka)';
-            }
-
+            $bpjsKesCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KES', 'NO BPJS KESEHATAN'])));
             $bpjsKetCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KET', 'NO BPJS KETENAGAKERJAAN'])));
 
             $hasPendidikanValid = false;
