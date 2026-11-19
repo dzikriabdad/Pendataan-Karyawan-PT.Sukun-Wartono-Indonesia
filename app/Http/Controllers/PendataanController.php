@@ -31,29 +31,44 @@ class PendataanController extends Controller
 {
     private function currentRole(): string
     {
-        return strtoupper((string) (session('pengguna_role') ?? session('role') ?? session('user_role') ?? ''));
+        return strtoupper(trim((string) (session('pengguna_role') ?? session('role') ?? session('user_role') ?? '')));
+    }
+
+    private function normalizedRole(): string
+    {
+        return str_replace(['_', '-', ' '], '', $this->currentRole());
     }
 
     private function isHrdPusat(): bool
     {
-        return $this->currentRole() === 'HRDPUSAT';
+        return $this->normalizedRole() === 'HRDPUSAT';
+    }
+
+    private function canManageKaryawan(): bool
+    {
+        return in_array($this->normalizedRole(), ['HRDPUSAT', 'HRD', 'ADMINHR'], true);
     }
 
     private function canImportExcel(): bool
     {
-        $role = str_replace('_', '', $this->currentRole());
-        $nama = strtolower(trim((string) (session('pengguna_nama') ?? session('username') ?? '')));
-
-        if ($role === 'ADMINHR' || $nama === 'adminhr') {
-            return false;
-        }
-
-        return in_array($this->currentRole(), ['HRDPUSAT', 'HRD'], true);
+        return in_array($this->normalizedRole(), ['HRDPUSAT', 'HRD'], true);
     }
 
-    private function ensureHrdAccess(string $message = 'Anda tidak memiliki akses ke halaman ini.'): void
+    private function canDeleteKaryawan(): bool
     {
-        if (! in_array($this->currentRole(), ['HRDPUSAT', 'ADMIN_HR', 'HRD'], true)) {
+        return $this->isHrdPusat();
+    }
+
+    private function ensureCanManageKaryawan(string $message = 'Anda tidak memiliki akses ke halaman ini.'): void
+    {
+        if (! $this->canManageKaryawan()) {
+            abort(403, $message);
+        }
+    }
+
+    private function ensureCanImportExcel(string $message = 'Anda tidak memiliki akses untuk melakukan import data.'): void
+    {
+        if (! $this->canImportExcel()) {
             abort(403, $message);
         }
     }
@@ -77,7 +92,7 @@ class PendataanController extends Controller
         }
 
         if ($request->has('no_bpjs_ketenagakerjaan')) {
-            $cleanBpjsKet = preg_replace('/[^0-9]/', '', (string) $request->input('no_bpjs_ketenagakerjaan'));
+            $cleanBpjsKet = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', (string) $request->input('no_bpjs_ketenagakerjaan')));
             $merged['no_bpjs_ketenagakerjaan'] = $cleanBpjsKet !== '' ? $cleanBpjsKet : null;
         }
 
@@ -208,36 +223,11 @@ class PendataanController extends Controller
         return $this->resolveBankIdFromRekening($noRek);
     }
 
-    private function determineStatusVerifikasi(
-        ?string $nip,
-        ?string $noRek,
-        ?string $noWa,
-        ?string $alamatDomisili,
-        ?string $tempatLahir = null,
-        ?int $departemenId = null
-    ): string {
-        $nipClean    = trim((string) $nip);
-        $waClean     = trim((string) $noWa);
-        $domClean    = trim((string) $alamatDomisili);
-        $tempatClean = trim((string) $tempatLahir);
-
-        $hasValidNip = ($nipClean !== '' && $nipClean !== '-');
-        $hasWa       = ($waClean !== '' && $waClean !== '-');
-        $hasDomisili = ($domClean !== '' && $domClean !== '-');
-
-        $namaDept = $departemenId
-            ? strtoupper(trim((string) DB::table('departemen')->where('id', $departemenId)->value('nama_departemen')))
-            : '';
-        $isProduksi     = ($namaDept === 'PRODUKSI');
-        $hasTempatLahir = ! $isProduksi || ($tempatClean !== '' && $tempatClean !== '-');
-
-        return ($hasValidNip && $hasWa && $hasDomisili && $hasTempatLahir) ? 'LENGKAP' : 'BELUM_LENGKAP';
-    }
-
     private function statusVerifikasiSqlExpression(): string
     {
         return "CASE WHEN
             TRIM(COALESCE(karyawan.nip, '')) NOT IN ('', '-')
+            AND UPPER(TRIM(COALESCE(karyawan.nip, ''))) NOT LIKE 'AUTO-%'
             AND TRIM(COALESCE(karyawan.no_wa, '')) NOT IN ('', '-')
             AND EXISTS (
                 SELECT 1 FROM alamat a
@@ -250,6 +240,18 @@ class PendataanController extends Controller
                 OR TRIM(COALESCE(karyawan.tempat_lahir, '')) NOT IN ('', '-')
             )
         THEN 'LENGKAP' ELSE 'BELUM_LENGKAP' END";
+    }
+
+    private function syncStatusVerifikasi(int $karyawanId): void
+    {
+        $statusExpr = $this->statusVerifikasiSqlExpression();
+
+        DB::table('karyawan')
+            ->leftJoin('departemen', 'karyawan.departemen_id', '=', 'departemen.id')
+            ->where('karyawan.id', $karyawanId)
+            ->update([
+                'karyawan.status_verifikasi' => DB::raw("({$statusExpr})"),
+            ]);
     }
 
     private function parseTahunOrDate(?string $val, bool $isEnd = false): ?string
@@ -312,13 +314,14 @@ class PendataanController extends Controller
 
     private function applySheetDataDropdowns(Worksheet $wsData, int $lastMasterRow, int $maxRow, int $maxPend, int $maxAnak, bool $isTemplate = false): void
     {
-        $setList = function (string $coord, string $formula) use ($wsData): void {
-            $val = $wsData->getCell($coord)->getDataValidation();
+        $setListRange = function (string $col, string $formula) use ($wsData, $maxRow): void {
+            $val = $wsData->getCell("{$col}2")->getDataValidation();
             $val->setType(DataValidation::TYPE_LIST);
             $val->setErrorStyle(DataValidation::STYLE_INFORMATION);
             $val->setAllowBlank(true);
             $val->setShowDropDown(true);
             $val->setFormula1($formula);
+            $val->setSqref("{$col}2:{$col}{$maxRow}");
         };
 
         $bankNames = DB::table('bank')->orderBy('nama_bank')->pluck('nama_bank')
@@ -346,26 +349,24 @@ class PendataanController extends Controller
         $startPendCol = $isTemplate ? 36 : 38;
         $startAnakCol = $startPendCol + ($maxPend * 4);
 
-        for ($r = 2; $r <= $maxRow; $r++) {
-            $setList("E{$r}", $opsiJk);
-            $setList("H{$r}", $opsiJenjang);
-            $setList("P{$r}", $opsiUnit);
-            $setList("R{$r}", $opsiNikah);
-            $setList("T{$r}", $opsiBank);
-            $setList("{$colGolDarah}{$r}", $opsiGolDarah);
-            $setList("{$colTipe}{$r}", $opsiTipe);
-            $setList("{$colStatus}{$r}", $opsiStatus);
-            $setList("{$colTransfer}{$r}", $opsiTransfer);
+        $setListRange('E', $opsiJk);
+        $setListRange('H', $opsiJenjang);
+        $setListRange('P', $opsiUnit);
+        $setListRange('R', $opsiNikah);
+        $setListRange('T', $opsiBank);
+        $setListRange($colGolDarah, $opsiGolDarah);
+        $setListRange($colTipe, $opsiTipe);
+        $setListRange($colStatus, $opsiStatus);
+        $setListRange($colTransfer, $opsiTransfer);
 
-            for ($i = 0; $i < $maxPend; $i++) {
-                $colJenjang = Coordinate::stringFromColumnIndex($startPendCol + ($i * 4));
-                $setList("{$colJenjang}{$r}", $opsiJenjang);
-            }
+        for ($i = 0; $i < $maxPend; $i++) {
+            $colJenjang = Coordinate::stringFromColumnIndex($startPendCol + ($i * 4));
+            $setListRange($colJenjang, $opsiJenjang);
+        }
 
-            for ($i = 0; $i < $maxAnak; $i++) {
-                $colPendAnak = Coordinate::stringFromColumnIndex($startAnakCol + ($i * 3) + 2);
-                $setList("{$colPendAnak}{$r}", $opsiPendAnak);
-            }
+        for ($i = 0; $i < $maxAnak; $i++) {
+            $colPendAnak = Coordinate::stringFromColumnIndex($startAnakCol + ($i * 3) + 2);
+            $setListRange($colPendAnak, $opsiPendAnak);
         }
     }
 
@@ -633,8 +634,8 @@ class PendataanController extends Controller
             'golongan_darah'          => 'nullable|string|max:5',
             'disabilitas'             => 'nullable|string|max:100',
             'golongan_id'             => 'nullable|exists:golongan,id',
-            'no_bpjs_kesehatan'       => 'nullable|digits_between:11,20',
-            'no_bpjs_ketenagakerjaan' => 'nullable|digits_between:11,20',
+            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
             'npwp'                    => 'nullable|string|max:50',
             'no_anggota_koperasi'     => 'nullable|string|max:50',
             'nama_pemilik_rekening'   => 'nullable|string|max:150',
@@ -659,8 +660,8 @@ class PendataanController extends Controller
             'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
             'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
             'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'          => 'Nomor BPJS Kesehatan harus 11 sampai 20 digit angka.',
-            'no_bpjs_ketenagakerjaan.digits_between'    => 'Nomor BPJS Ketenagakerjaan harus 11 sampai 20 digit angka.',
+            'no_bpjs_kesehatan.digits_between'          => 'Nomor BPJS Kesehatan harus angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
             'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
             'bersedia_transfer.required'                => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
             'nama_ayah.required'                        => 'Nama lengkap ayah kandung wajib diisi.',
@@ -750,15 +751,6 @@ class PendataanController extends Controller
                 ? strtoupper(trim($data['tempat_lahir']))
                 : null;
 
-            $statusVerifikasi = $this->determineStatusVerifikasi(
-                $nip,
-                $noRek,
-                $noWa,
-                $alamatDomisili,
-                $tempatLahirVal,
-                $penempatan['departemen_id']
-            );
-
             $namaPemilikRek = trim((string) $request->input('nama_pemilik_rekening', '')) ?: $data['nama_lengkap'];
 
             $karyawanId = DB::table('karyawan')->insertGetId([
@@ -799,7 +791,7 @@ class PendataanController extends Controller
                 'no_bpjs_ketenagakerjaan'  => $data['no_bpjs_ketenagakerjaan'] ?? null,
                 'npwp'                     => $this->normalizeNpwp($request->input('npwp')),
                 'no_anggota_koperasi'      => $request->input('no_anggota_koperasi'),
-                'status_verifikasi'        => $statusVerifikasi,
+                'status_verifikasi'        => 'BELUM_LENGKAP',
                 'created_at'               => now(),
                 'updated_at'               => now(),
             ]);
@@ -875,6 +867,8 @@ class PendataanController extends Controller
                     ]);
                 }
             }
+
+            $this->syncStatusVerifikasi($karyawanId);
         });
 
         return redirect()->route('pendataan.create')->with('sukses', 'Terima kasih! Data Anda sudah berhasil masuk ke HRD Sukun.');
@@ -915,16 +909,15 @@ class PendataanController extends Controller
         $pengalaman   = DB::table('pengalaman_kerja_sebelum')->where('karyawan_id', $id)->get();
         $riwayatSukun = DB::table('riwayat_pekerjaan_sukun')->where('karyawan_id', $id)->get();
 
-        $role      = $this->currentRole() ?: 'ADMIN_HR';
-        $backUrl   = ($role === 'ATASAN') ? url('/atasan/dashboard') : url('/hrd/dashboard');
-        $canDelete = $this->isHrdPusat();
+        $backUrl   = ($this->normalizedRole() === 'ATASAN') ? url('/atasan/dashboard') : url('/hrd/dashboard');
+        $canDelete = $this->canDeleteKaryawan();
 
         return view('pendataan.detail', compact('karyawan', 'alamat', 'pasangan', 'anak', 'pendidikan', 'pengalaman', 'riwayatSukun', 'backUrl', 'canDelete'));
     }
 
     public function editHrd($id)
     {
-        $this->ensureHrdAccess('Anda tidak memiliki akses untuk mengubah data karyawan.');
+        $this->ensureCanManageKaryawan('Anda tidak memiliki akses untuk mengubah data karyawan.');
 
         $karyawan = DB::table('karyawan')->where('id', $id)->first();
         if (! $karyawan) {
@@ -954,7 +947,7 @@ class PendataanController extends Controller
 
     public function updateHrd(Request $request, $id)
     {
-        $this->ensureHrdAccess('Anda tidak memiliki akses untuk memperbarui data karyawan.');
+        $this->ensureCanManageKaryawan('Anda tidak memiliki akses untuk memperbarui data karyawan.');
 
         $karyawan = DB::table('karyawan')->where('id', $id)->first();
         if (! $karyawan) {
@@ -1013,8 +1006,8 @@ class PendataanController extends Controller
             ],
             'nama_pemilik_rekening'   => 'nullable|string|max:150',
             'bersedia_transfer'       => 'required|in:YA,TIDAK',
-            'no_bpjs_kesehatan'       => 'nullable|digits_between:11,20',
-            'no_bpjs_ketenagakerjaan' => 'nullable|digits_between:11,20',
+            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
 
             'riwayat_pendidikan'                 => 'nullable|array',
             'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
@@ -1058,8 +1051,8 @@ class PendataanController extends Controller
             'tgl_lahir.before_or_equal'              => 'Tanggal lahir tidak boleh melebihi hari ini.',
             'anak.*.tgl_lahir_anak.date_format'      => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
             'anak.*.tgl_lahir_anak.before_or_equal'  => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'       => 'Nomor BPJS Kesehatan harus 11 sampai 20 digit angka.',
-            'no_bpjs_ketenagakerjaan.digits_between' => 'Nomor BPJS Ketenagakerjaan harus 11 sampai 20 digit angka.',
+            'no_bpjs_kesehatan.digits_between'       => 'Nomor BPJS Kesehatan harus angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'      => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
             'alamat_ktp.required'                    => 'Alamat KTP wajib diisi.',
             'no_rekening.regex'                      => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
             'bersedia_transfer.required'             => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
@@ -1068,6 +1061,29 @@ class PendataanController extends Controller
             'status_pernikahan.required'             => 'Status pernikahan wajib dipilih.',
             'email.email'                            => 'Format alamat email tidak valid.',
         ]);
+
+        if ($request->input('tipe_karyawan') !== 'DISTRIBUSI' && empty($request->input('unit_organisasi_id'))) {
+            throw ValidationException::withMessages([
+                'unit_organisasi_id' => 'Bagian / unit kerja wajib dipilih.',
+            ]);
+        }
+
+        if ($request->input('tipe_karyawan') === 'BORONG' && empty($request->input('jabatan_borong_id'))) {
+            throw ValidationException::withMessages([
+                'jabatan_borong_id' => 'Jenis pekerjaan borong wajib dipilih.',
+            ]);
+        }
+
+        if ($request->has('riwayat_pendidikan')) {
+            $validPend = array_filter((array) $request->input('riwayat_pendidikan', []), function ($rp) {
+                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
+            });
+            if (empty($validPend)) {
+                throw ValidationException::withMessages([
+                    'riwayat_pendidikan' => 'Riwayat pendidikan wajib diisi minimal 1.',
+                ]);
+            }
+        }
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
             throw ValidationException::withMessages([
@@ -1142,15 +1158,6 @@ class PendataanController extends Controller
                 ? (filled($request->input('tempat_lahir')) ? strtoupper(trim($request->input('tempat_lahir'))) : null)
                 : $karyawan->tempat_lahir;
 
-            $statusVerifikasi = $this->determineStatusVerifikasi(
-                $finalNip,
-                $noRek,
-                $noWa,
-                $alamatDomisili,
-                $tempatLahirVal,
-                $penempatan['departemen_id']
-            );
-
             $namaLengkap    = strtoupper($request->input('nama_lengkap', $karyawan->nama_lengkap));
             $namaPemilikRek = trim((string) $request->input('nama_pemilik_rekening', ''))
                 ?: ($karyawan->nama_pemilik_rekening ?: $namaLengkap);
@@ -1188,7 +1195,6 @@ class PendataanController extends Controller
                 'no_bpjs_ketenagakerjaan'  => $request->has('no_bpjs_ketenagakerjaan') ? $request->input('no_bpjs_ketenagakerjaan') : $karyawan->no_bpjs_ketenagakerjaan,
                 'npwp'                     => $this->normalizeNpwp($request->input('npwp', $karyawan->npwp)),
                 'no_anggota_koperasi'      => $request->input('no_anggota_koperasi', $karyawan->no_anggota_koperasi),
-                'status_verifikasi'        => $statusVerifikasi,
                 'updated_at'               => now(),
             ];
 
@@ -1285,6 +1291,8 @@ class PendataanController extends Controller
                     ]);
                 }
             }
+
+            $this->syncStatusVerifikasi($karyawan->id);
         });
 
         return redirect()->route('pendataan.detail', $karyawan->id)->with('sukses', 'Seluruh data karyawan berhasil diperbarui oleh HRD.');
@@ -1292,7 +1300,7 @@ class PendataanController extends Controller
 
     public function destroy($id)
     {
-        if (! $this->isHrdPusat()) {
+        if (! $this->canDeleteKaryawan()) {
             abort(403, 'Hanya HRD Pusat yang memiliki akses menghapus data karyawan.');
         }
 
@@ -1327,7 +1335,6 @@ class PendataanController extends Controller
             ]);
         }
 
-        // Bersihkan NIK dari karakter spasi/tanda baca
         if ($request->has('nik')) {
             $request->merge([
                 'nik' => preg_replace('/\D/', '', (string) $request->input('nik')),
@@ -1357,7 +1364,6 @@ class PendataanController extends Controller
         if (! $karyawan) {
             $authFailed = true;
         } else {
-            // 1. Verifikasi Bulan & Tahun Masuk Kerja
             if (empty($karyawan->tgl_masuk_kerja)) {
                 $authFailed = true;
             } else {
@@ -1373,7 +1379,6 @@ class PendataanController extends Controller
                 }
             }
 
-            // 2. Verifikasi Nama Ibu Kandung
             if (! $authFailed) {
                 if (! $this->matchNamaIbu((string) $request->input('nama_ibu'), (string) ($karyawan->nama_ibu ?? ''))) {
                     $authFailed = true;
@@ -1382,7 +1387,7 @@ class PendataanController extends Controller
         }
 
         if ($authFailed) {
-            RateLimiter::hit($throttleKey, 900); // 15 menit
+            RateLimiter::hit($throttleKey, 900);
             $attemptsLeft = RateLimiter::remaining($throttleKey, 5);
 
             return back()->withInput()->withErrors([
@@ -1406,9 +1411,7 @@ class PendataanController extends Controller
     {
         $normalize = function (string $str): string {
             $str = strtolower(trim($str));
-            // Hapus gelar / sebutan umum seperti hj, hajjah, ibu, ny, alm, st
             $str = preg_replace('/\b(hj|hajjah|hajah|ny|ibu|alm|almarhumah|st)\b\.?/i', '', $str);
-            // Hapus karakter selain huruf dan angka
             return preg_replace('/[^a-z0-9]/', '', $str);
         };
 
@@ -1423,7 +1426,6 @@ class PendataanController extends Controller
             return true;
         }
 
-        // Toleransi jika salah satu string memuat string lainnya (minimal 4 karakter)
         if (strlen($cleanInput) >= 4 && (str_contains($cleanDb, $cleanInput) || str_contains($cleanInput, $cleanDb))) {
             return true;
         }
@@ -1503,8 +1505,8 @@ class PendataanController extends Controller
                 'regex:/^(?:[0-9]{9,10}|[0-9]{15})$/',
             ],
             'nama_pemilik_rekening'   => 'nullable|string|max:150',
-            'no_bpjs_kesehatan'       => 'nullable|digits_between:11,20',
-            'no_bpjs_ketenagakerjaan' => 'nullable|digits_between:11,20',
+            'no_bpjs_kesehatan'       => 'nullable|string|max:30',
+            'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
             'npwp'                    => 'nullable|string|max:50',
             'no_anggota_koperasi'     => 'nullable|string|max:50',
 
@@ -1534,15 +1536,15 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nip.unique'                             => 'NIP sudah terdaftar pada karyawan lain.',
-            'tgl_lahir.date_format'                  => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
-            'tgl_lahir.after_or_equal'               => 'Tahun lahir tidak valid (minimal tahun 1940).',
-            'tgl_lahir.before_or_equal'              => 'Tanggal lahir tidak boleh melebihi hari ini.',
-            'anak.*.tgl_lahir_anak.date_format'      => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
-            'anak.*.tgl_lahir_anak.before_or_equal'  => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.digits_between'       => 'Nomor BPJS Kesehatan harus 11 sampai 20 digit angka.',
-            'no_bpjs_ketenagakerjaan.digits_between' => 'Nomor BPJS Ketenagakerjaan harus 11 sampai 20 digit angka.',
-            'no_rekening.regex'                      => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
+            'nip.unique'                            => 'NIP sudah terdaftar pada karyawan lain.',
+            'tgl_lahir.date_format'                 => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
+            'tgl_lahir.after_or_equal'              => 'Tahun lahir tidak valid (minimal tahun 1940).',
+            'tgl_lahir.before_or_equal'             => 'Tanggal lahir tidak boleh melebihi hari ini.',
+            'anak.*.tgl_lahir_anak.date_format'     => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
+            'anak.*.tgl_lahir_anak.before_or_equal' => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
+            'no_bpjs_kesehatan.digits_between'      => 'Nomor BPJS Kesehatan harus angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'     => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
+            'no_rekening.regex'                     => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
         ]);
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
@@ -1602,15 +1604,6 @@ class PendataanController extends Controller
                 ? (filled($request->input('tempat_lahir')) ? strtoupper(trim($request->input('tempat_lahir'))) : null)
                 : $karyawan->tempat_lahir;
 
-            $statusVerifikasi = $this->determineStatusVerifikasi(
-                $finalNip,
-                $noRek,
-                $noWa,
-                $alamatDomisili,
-                $tempatLahirVal,
-                $penempatan['departemen_id']
-            );
-
             $namaPemilikRek = trim((string) $request->input('nama_pemilik_rekening', ''))
                 ?: ($karyawan->nama_pemilik_rekening ?: $karyawan->nama_lengkap);
 
@@ -1642,7 +1635,6 @@ class PendataanController extends Controller
                 'no_bpjs_ketenagakerjaan' => $request->has('no_bpjs_ketenagakerjaan') ? $request->input('no_bpjs_ketenagakerjaan') : $karyawan->no_bpjs_ketenagakerjaan,
                 'npwp'                    => $this->normalizeNpwp($request->input('npwp', $karyawan->npwp)),
                 'no_anggota_koperasi'     => $request->input('no_anggota_koperasi', $karyawan->no_anggota_koperasi),
-                'status_verifikasi'       => $statusVerifikasi,
                 'updated_at'              => now(),
             ];
 
@@ -1741,6 +1733,8 @@ class PendataanController extends Controller
                     ]);
                 }
             }
+
+            $this->syncStatusVerifikasi($karyawan->id);
         });
 
         return redirect()->route('pendataan.edit.token', $token)->with('sukses', 'Semua data berhasil diperbarui!');
@@ -1748,7 +1742,7 @@ class PendataanController extends Controller
 
     public function downloadTemplate()
     {
-        $this->ensureHrdAccess('Anda tidak memiliki akses untuk mengunduh template import.');
+        $this->ensureCanManageKaryawan('Anda tidak memiliki akses untuk mengunduh template import.');
 
         $spreadsheet = new Spreadsheet();
         $spreadsheet->getDefaultStyle()->getFont()->setName('Calibri')->setSize(11);
@@ -1876,15 +1870,16 @@ class PendataanController extends Controller
         $writer   = new Xlsx($spreadsheet);
         $writer->setPreCalculateFormulas(false);
 
-        $tempFile = tempnam(sys_get_temp_dir(), 'swi_tpl_');
+        $tempDir = storage_path('app/temp');
+        if (! is_dir($tempDir)) {
+            mkdir($tempDir, 0755, true);
+        }
+
+        $tempFile = tempnam($tempDir, 'swi_tpl_');
         $writer->save($tempFile);
 
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet, $writer);
-
-        while (ob_get_level() > 0) {
-            ob_end_clean();
-        }
 
         return response()->download($tempFile, $fileName, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1893,9 +1888,7 @@ class PendataanController extends Controller
 
     public function importExcel(Request $request)
     {
-        if (! $this->canImportExcel()) {
-            abort(403, 'Anda tidak memiliki akses untuk melakukan import data.');
-        }
+        $this->ensureCanImportExcel('Anda tidak memiliki akses untuk melakukan import data.');
 
         $request->validate([
             'file_excel' => 'required|file|mimes:xlsx,xls|max:10240',
@@ -2112,10 +2105,7 @@ class PendataanController extends Controller
                 $missingFields[] = 'BPJS Kes (jika diisi harus 11-20 digit angka)';
             }
 
-            $bpjsKetCheck = preg_replace('/[^0-9]/', '', $getVal($r, ['BPJS KET', 'NO BPJS KETENAGAKERJAAN']));
-            if ($bpjsKetCheck !== '' && (strlen($bpjsKetCheck) < 11 || strlen($bpjsKetCheck) > 20)) {
-                $missingFields[] = 'BPJS Ket (jika diisi harus 11-20 digit angka)';
-            }
+            $bpjsKetCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KET', 'NO BPJS KETENAGAKERJAAN'])));
 
             $hasPendidikanValid = false;
             for ($pi = 1; $pi <= 10; $pi++) {
@@ -2235,15 +2225,6 @@ class PendataanController extends Controller
                 $pendTerakhir = $this->normalizeJenjangPendidikan($getVal($r, ['PENDIDIKAN TERAKHIR']));
                 $lastPend     = ! empty($parsedPend) ? end($parsedPend) : null;
 
-                $statusVerifikasi = $this->determineStatusVerifikasi(
-                    $finalNip,
-                    $noRek,
-                    $noWa,
-                    $alamatDomisili,
-                    $tempatLahir,
-                    $penempatan['departemen_id']
-                );
-
                 $karyawanId = DB::table('karyawan')->insertGetId([
                     'token'                    => bin2hex(random_bytes(32)),
                     'nip'                      => $finalNip,
@@ -2281,7 +2262,7 @@ class PendataanController extends Controller
                     'no_bpjs_ketenagakerjaan'  => $bpjsKet,
                     'npwp'                     => $npwp,
                     'no_anggota_koperasi'      => $noKop,
-                    'status_verifikasi'        => $statusVerifikasi,
+                    'status_verifikasi'        => 'BELUM_LENGKAP',
                     'created_at'               => now(),
                     'updated_at'               => now(),
                 ]);
@@ -2380,6 +2361,8 @@ class PendataanController extends Controller
                         'tahun_keluar'    => $thnKeluar,
                     ]);
                 }
+
+                $this->syncStatusVerifikasi($karyawanId);
 
                 DB::commit();
                 $insertedCount++;
@@ -2953,15 +2936,16 @@ class PendataanController extends Controller
         $writer->setIncludeCharts(true);
         $writer->setPreCalculateFormulas(false);
 
-        $tempFile = tempnam(sys_get_temp_dir(), 'swi_excel_');
+        $tempDir = storage_path('app/temp');
+        if (! is_dir($tempDir)) {
+            mkdir($tempDir, 0755, true);
+        }
+
+        $tempFile = tempnam($tempDir, 'swi_excel_');
         $writer->save($tempFile);
 
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet, $writer);
-
-        while (ob_get_level() > 0) {
-            ob_end_clean();
-        }
 
         return response()->download($tempFile, $fileName, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -3222,7 +3206,7 @@ class PendataanController extends Controller
             'karyawan'       => $query->paginate(10)->withQueryString(),
             'judul'          => 'Dashboard HRD',
             'mode'           => 'HRD',
-            'canDelete'      => $this->isHrdPusat(),
+            'canDelete'      => $this->canDeleteKaryawan(),
             'canImport'      => $this->canImportExcel(),
             'totalData'      => $totalData,
             'listDepartemen' => DB::table('departemen')->orderBy('nama_departemen')->pluck('nama_departemen'),
@@ -3250,8 +3234,8 @@ class PendataanController extends Controller
             'karyawan'       => $query->paginate(10)->withQueryString(),
             'judul'          => 'Dashboard Kepala Bagian',
             'mode'           => 'ATASAN',
-            'canDelete'      => $this->isHrdPusat(),
-            'canImport'      => $this->canImportExcel(),
+            'canDelete'      => false,
+            'canImport'      => false,
             'totalData'      => $totalData,
             'listDepartemen' => DB::table('departemen')->orderBy('nama_departemen')->pluck('nama_departemen'),
         ]);
