@@ -230,9 +230,8 @@
                                 @endif
                                 <div class="text-xs font-normal text-slate-500">Lahir: {{ $item->tgl_lahir ?? '-' }}</div>
                             </td>
-                            {{-- Sesuaikan nama kolom nomor telepon jika di DB berbeda (misal: no_telepon / no_wa) --}}
                             <td class="px-4 py-3 font-mono text-xs text-slate-700">
-                                {{ $item->no_hp ?? $item->no_telepon ?? '-' }}
+                                {{ (filled($item->no_wa ?? null) && trim($item->no_wa) !== '-') ? $item->no_wa : '-' }}
                             </td>
                             <td class="px-4 py-3">{{ $item->nama_departemen ?? '-' }}</td>
                             <td class="px-4 py-3">{{ $item->nama_unit ?? '-' }}</td>
