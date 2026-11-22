@@ -2451,7 +2451,13 @@ class PendataanController extends Controller
         $divisiList  = $allDivisi;
 
         if ($filterMeta['allowed_unit_ids'] !== null) {
-            $masterUnits = $allUnits->whereIn('id', $filterMeta['allowed_unit_ids'])->values();
+            $effectiveUnitIds = collect($filterMeta['allowed_unit_ids'])
+                ->merge($sortedExport->pluck('unit_organisasi_id')->filter())
+                ->unique()
+                ->values()
+                ->toArray();
+
+            $masterUnits = $allUnits->whereIn('id', $effectiveUnitIds)->values();
             $divisiList  = $allDivisi->whereIn('id', $masterUnits->pluck('departemen_id')->unique())->values();
         }
 
@@ -3079,7 +3085,7 @@ class PendataanController extends Controller
         return $response;
     }
 
-    private function buildDashboardQuery(Request $request, ?array $allowedUnitIds = null): array
+    private function buildDashboardQuery(Request $request, ?array $allowedUnitIds = null, array $extraKaryawanIds = []): array
     {
         $statusExpr = $this->statusVerifikasiSqlExpression();
 
@@ -3112,10 +3118,17 @@ class PendataanController extends Controller
         ];
 
         if ($allowedUnitIds !== null) {
-            if (empty($allowedUnitIds)) {
+            if (empty($allowedUnitIds) && empty($extraKaryawanIds)) {
                 $query->whereRaw('1 = 0');
             } else {
-                $query->whereIn('karyawan.unit_organisasi_id', $allowedUnitIds);
+                $query->where(function ($q) use ($allowedUnitIds, $extraKaryawanIds) {
+                    if (! empty($allowedUnitIds)) {
+                        $q->whereIn('karyawan.unit_organisasi_id', $allowedUnitIds);
+                    }
+                    if (! empty($extraKaryawanIds)) {
+                        $q->orWhereIn('karyawan.id', $extraKaryawanIds);
+                    }
+                });
             }
         }
 
@@ -3216,10 +3229,33 @@ class PendataanController extends Controller
 
     public function dashboardAtasan(Request $request)
     {
-        $penggunaId = session('pengguna_id');
+        $penggunaId = (int) session('pengguna_id');
         $unitIds    = DB::table('atasan_unit')->where('pengguna_id', $penggunaId)->pluck('unit_organisasi_id')->toArray();
 
-        [$query, $filterMeta] = $this->buildDashboardQuery($request, $unitIds);
+        $extraKaryawanIds = [];
+        $username = strtolower(trim((string) (
+            session('pengguna_username')
+            ?? session('username')
+            ?? DB::table('pengguna')->where('id', $penggunaId)->value('username')
+            ?? ''
+        )));
+
+        if ($penggunaId === 236 || $username === 'kepala_teknik') {
+            $extraKaryawanIds = [
+                453,  // SUBAGYO (SKM)
+                449,  // SUMARJONO (SKM)
+                1366, // SOFWAN SUTIKNO (SKM)
+                514,  // ABDUL AZIS (SKM)
+                443,  // MUHAMMAD ZULFA RATHOMI (SKM)
+                103,  // SUMARYANTO (SKM)
+                227,  // ABDUL MAKIS (SKM)
+                441,  // SUBANDI (SKM)
+                1040, // NOOR FALIH (SKM)
+                100,  // REZA DWI RAHMAN (SKM)
+            ];
+        }
+
+        [$query, $filterMeta] = $this->buildDashboardQuery($request, $unitIds, $extraKaryawanIds);
 
         if ($request->input('export') === 'excel') {
             return $this->exportExcel($query->get(), $filterMeta);
