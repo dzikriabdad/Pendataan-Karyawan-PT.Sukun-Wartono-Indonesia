@@ -55,6 +55,7 @@
             unitNama: '',
             jabatanDipilih: @js(old('nama_jabatan', $karyawan->nama_jabatan ?? '')),
             distribusiJabatan: '',
+            customDistribusiJabatan: '',
             rmRegional: '',
             amWilayah: '',
             borongId: @js((string) old('jabatan_borong_id', $karyawan->jabatan_borong_id ?? '')),
@@ -98,7 +99,7 @@
                 <div>
                     <label class="lb">Jenis Karyawan <span class="req">*</span></label>
                     <select name="tipe_karyawan" x-model="tipe" class="in" required
-                            @change="jabatanDipilih = ''; distribusiJabatan = ''; rmRegional = ''; amWilayah = ''; if (tipe === 'DISTRIBUSI') { unitId = ''; unitNama = ''; }">
+                            @change="jabatanDipilih = ''; distribusiJabatan = ''; customDistribusiJabatan = ''; rmRegional = ''; amWilayah = ''; if (tipe === 'DISTRIBUSI') { unitId = ''; unitNama = ''; }">
                         <option value="BULANAN">Bulanan</option>
                         <option value="HARIAN">Harian</option>
                         <option value="BORONG">Borong</option>
@@ -196,9 +197,12 @@
                             :disabled="tipe !== 'DISTRIBUSI'"
                             :required="tipe === 'DISTRIBUSI'">
                         <option value="">-- Pilih Jabatan Distribusi --</option>
-                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO','ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
+                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
                             <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
                         @endforeach
+                        <template x-if="customDistribusiJabatan">
+                            <option :value="customDistribusiJabatan" x-text="customDistribusiJabatan"></option>
+                        </template>
                     </select>
                 </div>
 
@@ -687,23 +691,45 @@ function editKaryawanForm(initialData) {
                 }
             });
 
-            const jabatanLama = String(this.jabatanDipilih || '').trim();
-            if (jabatanLama.toUpperCase().startsWith('RM')) {
+            const opsiDistribusi = ['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'];
+            const opsiAmWilayah  = ['Jateng 1', 'Jateng 2', 'Jateng 3', 'Jabar 1', 'Jabar 2', 'Jatim 1', 'Jatim 2', 'Jatim 3', 'Sumatra', 'Kalimantan'];
+            const jabatanLama    = String(this.jabatanDipilih || '').trim();
+            const jabatanUpper   = jabatanLama.toUpperCase();
+
+            if (jabatanUpper.startsWith('RM')) {
                 this.distribusiJabatan = 'RM';
                 if (/REGIONAL\s*1/i.test(jabatanLama)) this.rmRegional = 'Regional 1';
                 else if (/REGIONAL\s*2/i.test(jabatanLama)) this.rmRegional = 'Regional 2';
                 else if (/REGIONAL\s*3/i.test(jabatanLama)) this.rmRegional = 'Regional 3';
-            } else if (jabatanLama.toUpperCase().startsWith('AM ')) {
+            } else if (jabatanUpper === 'AM' || jabatanUpper.startsWith('AM ')) {
                 this.distribusiJabatan = 'AM';
-                this.amWilayah = jabatanLama.replace(/^AM\s+/i, '').trim();
-            } else if (this.tipe === 'DISTRIBUSI') {
-                this.distribusiJabatan = jabatanLama;
+                const rawWilayah = jabatanLama.replace(/^AM\s*/i, '').trim();
+                const matchAm = opsiAmWilayah.find(w => w.toUpperCase() === rawWilayah.toUpperCase());
+                this.amWilayah = matchAm || rawWilayah;
+            } else if (this.tipe === 'DISTRIBUSI' && jabatanLama !== '') {
+                const matchDist = opsiDistribusi.find(j => j.toUpperCase() === jabatanUpper);
+                if (matchDist) {
+                    this.distribusiJabatan = matchDist;
+                } else {
+                    this.customDistribusiJabatan = jabatanLama;
+                    this.$nextTick(() => {
+                        this.distribusiJabatan = jabatanLama;
+                    });
+                }
             }
 
             this.$nextTick(() => {
                 const selectUnit = document.getElementById('unit_organisasi_id');
                 if (selectUnit && selectUnit.selectedOptions.length > 0) {
                     this.unitNama = selectUnit.selectedOptions[0].text.trim();
+                }
+
+                if (this.isSatpam() && this.jabatanDipilih) {
+                    const opsiSatpam = ['Anggota', 'Wadanru', 'Danru', 'Danton', 'Kepala Satpam'];
+                    const matchSatpam = opsiSatpam.find(s => s.toUpperCase() === String(this.jabatanDipilih).trim().toUpperCase());
+                    if (matchSatpam) {
+                        this.jabatanDipilih = matchSatpam;
+                    }
                 }
             });
         },
