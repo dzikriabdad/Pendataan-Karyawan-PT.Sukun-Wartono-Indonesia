@@ -1494,8 +1494,7 @@ class PendataanController extends Controller
             'disabilitas'             => 'nullable|string|max:100',
             'no_wa'                   => 'nullable|string|max:30',
             'email'                   => 'nullable|email|max:150',
-            'alamat_ktp'              => 'required|string',
-            'alamat_domisili'         => 'nullable|string',
+            'alamat_domisili'         => 'required|string',
             'tipe_karyawan'           => 'nullable|in:BULANAN,HARIAN,BORONG,DISTRIBUSI',
             'ket_karyawan'            => 'nullable|in:TETAP,HARIAN_LEPAS,KONTRAK',
             'unit_organisasi_id'      => 'nullable|exists:unit_organisasi,id',
@@ -1544,7 +1543,7 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
             'nip.unique'                                => 'NIP sudah terdaftar pada karyawan lain.',
-            'alamat_ktp.required'                       => 'Alamat KTP wajib diisi.',
+            'alamat_domisili.required'                  => 'Alamat domisili saat ini wajib diisi.',
             'tgl_lahir.date_format'                     => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
             'tgl_lahir.after_or_equal'                  => 'Tahun lahir tidak valid (minimal tahun 1940).',
             'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
@@ -1596,17 +1595,20 @@ class PendataanController extends Controller
 
             $noWa = trim((string) ($request->has('no_wa') ? $request->input('no_wa', '') : $karyawan->no_wa));
 
-            $alamatKtp = trim((string) $request->input('alamat_ktp'));
+            $savedAlamatKtp = trim((string) DB::table('alamat')
+                ->where('karyawan_id', $karyawan->id)
+                ->where('jenis_alamat', 'KTP')
+                ->value('alamat_lengkap'));
 
-            $savedAlamatDomisili = DB::table('alamat')
+            $savedAlamatDomisili = trim((string) DB::table('alamat')
                 ->where('karyawan_id', $karyawan->id)
                 ->where('jenis_alamat', 'DOMISILI')
-                ->value('alamat_lengkap');
+                ->value('alamat_lengkap'));
 
             $alamatDomisili = trim((string) (
                 $request->filled('alamat_domisili')
                     ? $request->input('alamat_domisili')
-                    : ($savedAlamatDomisili ?: $alamatKtp)
+                    : ($savedAlamatDomisili ?: $savedAlamatKtp)
             ));
 
             $tempatLahirVal = $request->has('tempat_lahir')
@@ -1674,15 +1676,12 @@ class PendataanController extends Controller
 
             DB::table('karyawan')->where('id', $karyawan->id)->update($updateKaryawan);
 
-            DB::table('alamat')->updateOrInsert(
-                ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'KTP'],
-                ['alamat_lengkap' => $alamatKtp]
-            );
-
-            DB::table('alamat')->updateOrInsert(
-                ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'DOMISILI'],
-                ['alamat_lengkap' => $alamatDomisili]
-            );
+            if ($alamatDomisili !== '') {
+                DB::table('alamat')->updateOrInsert(
+                    ['karyawan_id' => $karyawan->id, 'jenis_alamat' => 'DOMISILI'],
+                    ['alamat_lengkap' => $alamatDomisili]
+                );
+            }
 
             if ($statusPernikahan === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) !== '') {
                 DB::table('pasangan')->updateOrInsert(
