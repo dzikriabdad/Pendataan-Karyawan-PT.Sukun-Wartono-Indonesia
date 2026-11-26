@@ -41,6 +41,27 @@ foreach ($errors->keys() as $k) {
         $step = max($step, 4);
     }
 }
+
+$opsiDistribusi = collect($jabatanDistribusi ?? [])
+    ->map(function ($item) {
+        $val   = trim((string) ($item->kode_jabatan ?? $item->nama_jabatan ?? $item->jabatan ?? ''));
+        $upper = strtoupper($val);
+        if ($upper === 'RM' || str_starts_with($upper, 'RM ')) {
+            return 'RM';
+        }
+        if ($upper === 'AM' || str_starts_with($upper, 'AM ')) {
+            return 'AM';
+        }
+        return $val;
+    })
+    ->filter()
+    ->unique(fn ($v) => strtoupper($v))
+    ->values()
+    ->toArray();
+
+if (empty($opsiDistribusi)) {
+    $opsiDistribusi = ['OB/HELPER', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'];
+}
 @endphp
 
 <!DOCTYPE html>
@@ -491,7 +512,7 @@ foreach ($errors->keys() as $k) {
                             @change="if (distribusiJabatan !== 'RM') rmRegional = ''; if (distribusiJabatan !== 'AM') amWilayah = '';"
                             :disabled="tipe !== 'DISTRIBUSI'">
                         <option value="">-- Pilih Jabatan Distribusi --</option>
-                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
+                        @foreach ($opsiDistribusi as $jbtDist)
                             <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
                         @endforeach
                     </select>
@@ -864,6 +885,9 @@ foreach ($errors->keys() as $k) {
     </footer>
 </main>
 
+<script>
+window.__opsiDistribusi = @js($opsiDistribusi);
+</script>
 @verbatim
 <script>
 function formKaryawan(initialData) {
@@ -929,17 +953,27 @@ function formKaryawan(initialData) {
                 }
             });
 
-            const jabatanLama = String(this.jabatanDipilih || '').trim();
-            if (jabatanLama.toUpperCase().startsWith('RM')) {
+            const opsiDistribusi = Array.isArray(window.__opsiDistribusi) ? window.__opsiDistribusi : [];
+            const opsiAmWilayah  = ['Jateng 1', 'Jateng 2', 'Jateng 3', 'Jabar 1', 'Jabar 2', 'Jatim 1', 'Jatim 2', 'Jatim 3', 'Sumatra', 'Kalimantan'];
+            const jabatanLama    = String(this.jabatanDipilih || this.distribusiJabatan || '').trim();
+            const jabatanUpper   = jabatanLama.toUpperCase();
+
+            if (jabatanUpper.startsWith('RM')) {
                 this.distribusiJabatan = 'RM';
                 if (/REGIONAL\s*1/i.test(jabatanLama)) this.rmRegional = 'Regional 1';
                 else if (/REGIONAL\s*2/i.test(jabatanLama)) this.rmRegional = 'Regional 2';
                 else if (/REGIONAL\s*3/i.test(jabatanLama)) this.rmRegional = 'Regional 3';
-            } else if (jabatanLama.toUpperCase().startsWith('AM ')) {
+            } else if (jabatanUpper === 'AM' || jabatanUpper.startsWith('AM ')) {
                 this.distribusiJabatan = 'AM';
-                this.amWilayah = jabatanLama.replace(/^AM\s+/i, '').trim();
-            } else if (this.tipe === 'DISTRIBUSI') {
-                this.distribusiJabatan = jabatanLama;
+                const rawWilayah = jabatanLama.replace(/^AM\s*/i, '').trim();
+                const matchAm = opsiAmWilayah.find(w => w.toUpperCase() === rawWilayah.toUpperCase());
+                this.amWilayah = matchAm || rawWilayah;
+            } else if (this.tipe === 'DISTRIBUSI' && jabatanLama !== '') {
+                let matchDist = opsiDistribusi.find(j => j.toUpperCase() === jabatanUpper);
+                if (!matchDist && (jabatanUpper === 'OB' || jabatanUpper === 'HELPER')) {
+                    matchDist = opsiDistribusi.find(j => j.toUpperCase() === 'OB/HELPER');
+                }
+                this.distribusiJabatan = matchDist || jabatanLama;
             }
 
             document.addEventListener('input', () => this.$nextTick(() => this.saveDraft()));

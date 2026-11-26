@@ -50,6 +50,27 @@
 
     @php
         $riwayatLuarData = $riwayatLuar ?? $pengalaman ?? collect();
+
+        $opsiDistribusi = collect($jabatanDistribusi ?? [])
+            ->map(function ($item) {
+                $val   = trim((string) ($item->kode_jabatan ?? $item->nama_jabatan ?? $item->jabatan ?? ''));
+                $upper = strtoupper($val);
+                if ($upper === 'RM' || str_starts_with($upper, 'RM ')) {
+                    return 'RM';
+                }
+                if ($upper === 'AM' || str_starts_with($upper, 'AM ')) {
+                    return 'AM';
+                }
+                return $val;
+            })
+            ->filter()
+            ->unique(fn ($v) => strtoupper($v))
+            ->values()
+            ->toArray();
+
+        if (empty($opsiDistribusi)) {
+            $opsiDistribusi = ['OB/HELPER', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'];
+        }
     @endphp
 
     <form action="{{ url('/hrd/karyawan/update/' . $karyawan->id) }}" method="POST" class="space-y-6"
@@ -202,7 +223,7 @@
                             :disabled="tipe !== 'DISTRIBUSI'"
                             :required="tipe === 'DISTRIBUSI'">
                         <option value="">-- Pilih Jabatan Distribusi --</option>
-                        @foreach (['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'] as $jbtDist)
+                        @foreach ($opsiDistribusi as $jbtDist)
                             <option value="{{ $jbtDist }}">{{ $jbtDist }}</option>
                         @endforeach
                         <template x-if="customDistribusiJabatan">
@@ -649,6 +670,9 @@
     </form>
 </div>
 
+<script>
+window.__opsiDistribusi = @js($opsiDistribusi);
+</script>
 @verbatim
 <script>
 function editHrdForm(initialData) {
@@ -679,7 +703,7 @@ function editHrdForm(initialData) {
                 }
             });
 
-            const opsiDistribusi = ['OB', 'Sales Motoris', 'Sales Kanvas', 'Sales Dropping', 'Sales CCO', 'TL', 'TL CCO', 'ADMIN', 'SS', 'AM', 'RM'];
+            const opsiDistribusi = Array.isArray(window.__opsiDistribusi) ? window.__opsiDistribusi : [];
             const opsiAmWilayah  = ['Jateng 1', 'Jateng 2', 'Jateng 3', 'Jabar 1', 'Jabar 2', 'Jatim 1', 'Jatim 2', 'Jatim 3', 'Sumatra', 'Kalimantan'];
             const jabatanLama    = String(this.jabatanDipilih || '').trim();
             const jabatanUpper   = jabatanLama.toUpperCase();
@@ -695,7 +719,10 @@ function editHrdForm(initialData) {
                 const matchAm = opsiAmWilayah.find(w => w.toUpperCase() === rawWilayah.toUpperCase());
                 this.amWilayah = matchAm || rawWilayah;
             } else if (this.tipe === 'DISTRIBUSI' && jabatanLama !== '') {
-                const matchDist = opsiDistribusi.find(j => j.toUpperCase() === jabatanUpper);
+                let matchDist = opsiDistribusi.find(j => j.toUpperCase() === jabatanUpper);
+                if (!matchDist && (jabatanUpper === 'OB' || jabatanUpper === 'HELPER')) {
+                    matchDist = opsiDistribusi.find(j => j.toUpperCase() === 'OB/HELPER');
+                }
                 if (matchDist) {
                     this.distribusiJabatan = matchDist;
                 } else {
