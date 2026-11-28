@@ -9,12 +9,11 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use PhpOffice\PhpSpreadsheet\Cell\Cell;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Cell\DataValidation;
-use PhpOffice\PhpSpreadsheet\Cell\DefaultValueBinder;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
@@ -67,6 +66,42 @@ class PendataanController extends Controller
     {
         if (! $this->canImportExcel()) {
             abort(403, $message);
+        }
+    }
+
+    private function ensureMemoryLimit(string $minLimit = '512M'): void
+    {
+        $toBytes = function (string $val): int {
+            $val = trim($val);
+            if ($val === '-1') {
+                return PHP_INT_MAX;
+            }
+            $unit  = strtolower(substr($val, -1));
+            $bytes = (int) $val;
+            return match ($unit) {
+                'g'     => $bytes * 1024 * 1024 * 1024,
+                'm'     => $bytes * 1024 * 1024,
+                'k'     => $bytes * 1024,
+                default => $bytes,
+            };
+        };
+
+        $current = (string) ini_get('memory_limit');
+        if ($current !== '' && $toBytes($current) < $toBytes($minLimit)) {
+            @ini_set('memory_limit', $minLimit);
+        }
+    }
+
+    private function cleanupOldTempFiles(string $tempDir, int $maxAgeSeconds = 3600): void
+    {
+        if (! is_dir($tempDir)) {
+            return;
+        }
+        $now = time();
+        foreach (glob($tempDir . '/swi_*') ?: [] as $file) {
+            if (is_file($file) && ($now - @filemtime($file)) > $maxAgeSeconds) {
+                @unlink($file);
+            }
         }
     }
 
@@ -237,6 +272,18 @@ class PendataanController extends Controller
         THEN 'LENGKAP' ELSE 'BELUM_LENGKAP' END";
     }
 
+    private function computeStatusVerifikasi(?string $noWa, ?string $alamatDomisili, ?string $namaDepartemen, ?string $tempatLahir): string
+    {
+        $hasWa          = trim((string) $noWa) !== '' && trim((string) $noWa) !== '-';
+        $hasDomisili    = trim((string) $alamatDomisili) !== '' && trim((string) $alamatDomisili) !== '-';
+        $deptUpper      = strtoupper(trim((string) $namaDepartemen));
+        $hasTempatLahir = trim((string) $tempatLahir) !== '' && trim((string) $tempatLahir) !== '-';
+
+        return ($hasWa && $hasDomisili && ($deptUpper !== 'PRODUKSI' || $hasTempatLahir))
+            ? 'LENGKAP'
+            : 'BELUM_LENGKAP';
+    }
+
     private function syncStatusVerifikasi(int $karyawanId): void
     {
         $statusExpr = $this->statusVerifikasiSqlExpression();
@@ -274,18 +321,61 @@ class PendataanController extends Controller
         }
 
         return match (true) {
-            str_contains($clean, 'SD') || str_contains($clean, 'MI')                       => 'SD',
-            str_contains($clean, 'SMP') || str_contains($clean, 'MTS')                     => 'SMP',
-            str_contains($clean, 'SMA') || str_contains($clean, 'SMK') || $clean === 'MA'  => 'SMA/SMK',
-            $clean === 'D1'                                                                => 'D1',
-            $clean === 'D2'                                                                => 'D2',
-            $clean === 'D3'                                                                => 'D3',
-            $clean === 'D4'                                                                => 'D4',
-            str_contains($clean, 'S1')                                                     => 'S1',
-            str_contains($clean, 'S2')                                                     => 'S2',
-            str_contains($clean, 'S3')                                                     => 'S3',
-            default                                                                        => $clean,
+            str_contains($clean, 'TIDAK') || str_contains($clean, 'TDK') || str_contains($clean, 'NON') || str_contains($clean, 'TANPA') => 'TIDAK SEKOLAH',
+            str_contains($clean, 'SD') || str_contains($clean, 'MI')                                                                   => 'SD',
+            str_contains($clean, 'SMP') || str_contains($clean, 'MTS')                                                                 => 'SMP',
+            str_contains($clean, 'SMA') || str_contains($clean, 'SMK') || $clean === 'MA'                                              => 'SMA/SMK',
+            $clean === 'D1'                                                                                                            => 'D1',
+            $clean === 'D2'                                                                                                            => 'D2',
+            $clean === 'D3'                                                                                                            => 'D3',
+            $clean === 'D4'                                                                                                            => 'D4',
+            str_contains($clean, 'S1')                                                                                                 => 'S1',
+            str_contains($clean, 'S2')                                                                                                 => 'S2',
+            str_contains($clean, 'S3')                                                                                                 => 'S3',
+            default                                                                                                                    => $clean,
         };
+    }
+
+    private function validateAndFilterRiwayatPendidikan(array $rawList): array
+    {
+        $filtered = [];
+
+        foreach ($rawList as $idx => $rp) {
+            $jenjangRaw = trim((string) ($rp['jenjang'] ?? ''));
+            $jenjang    = $this->normalizeJenjangPendidikan($jenjangRaw);
+            $instansi   = trim((string) ($rp['nama_instansi'] ?? ''));
+            $jurusan    = trim((string) ($rp['jurusan'] ?? ''));
+            $nilai      = trim((string) ($rp['nilai_ipk'] ?? ''));
+
+            if ($jenjang === 'TIDAK SEKOLAH') {
+                continue;
+            }
+
+            if ($jenjang === '' && $instansi === '') {
+                continue;
+            }
+
+            if ($jenjang !== '' && $instansi === '') {
+                throw ValidationException::withMessages([
+                    "riwayat_pendidikan.$idx.nama_instansi" => 'Nama sekolah / universitas wajib diisi.',
+                ]);
+            }
+
+            if ($jenjang === '' && $instansi !== '') {
+                throw ValidationException::withMessages([
+                    "riwayat_pendidikan.$idx.jenjang" => 'Jenjang pendidikan wajib dipilih.',
+                ]);
+            }
+
+            $filtered[] = [
+                'jenjang'       => strtoupper($jenjang),
+                'nama_instansi' => strtoupper($instansi),
+                'jurusan'       => ($jurusan !== '' && $jurusan !== '-') ? strtoupper($jurusan) : null,
+                'nilai_ipk'     => ($nilai !== '' && $nilai !== '-') ? $nilai : null,
+            ];
+        }
+
+        return $filtered;
     }
 
     private function normalizePendidikanAnak(string $raw): ?string
@@ -334,7 +424,7 @@ class PendataanController extends Controller
         $opsiStatus   = '"TETAP,HARIAN_LEPAS,KONTRAK"';
         $opsiTransfer = '"YA,TIDAK"';
         $opsiGolDarah = '"A,B,AB,O,-"';
-        $opsiJenjang  = '"SD,SMP,SMA/SMK,D1,D2,D3,D4,S1,S2,S3"';
+        $opsiJenjang  = '"TIDAK SEKOLAH,SD,SMP,SMA/SMK,D1,D2,D3,D4,S1,S2,S3"';
         $opsiPendAnak = '"Belum sekolah,TK / PAUD,SD,SMP,SMA / SMK,Kuliah,Sudah bekerja"';
 
         $colGolDarah  = $isTemplate ? 'AE' : 'AG';
@@ -368,36 +458,36 @@ class PendataanController extends Controller
     private function buildDataHeaders(int $maxPend = 4, int $maxAnak = 5, int $maxKarir = 3, int $maxPeng = 3, bool $isTemplate = false): array
     {
         $dataHeaders = [
-            'No',                                   // A (1)
-            'Nama Lengkap',                         // B (2)
-            'NIP',                                  // C (3)
-            'NIK',                                  // D (4)
-            'Jenis Kelamin',                        // E (5)
-            'Tempat Lahir',                         // F (6)
-            'Tgl Lahir',                            // G (7)
-            'Pendidikan Terakhir',                  // H (8)
-            'Nama Ayah',                            // I (9)
-            'Nama Ibu',                             // J (10)
-            'Alamat KTP',                           // K (11)
-            'Alamat Domisili',                      // L (12)
-            'No HP/WA',                             // M (13)
-            'Email',                                // N (14)
-            'Jabatan',                              // O (15)
-            'Unit',                                 // P (16)
-            'Tanggal Masuk PT Sukun (YYYY-MM-DD)',  // Q (17)
-            'Pernikahan',                           // R (18)
-            'Disabilitas',                          // S (19)
-            'Nama Bank',                            // T (20)
-            'No Rekening',                          // U (21)
-            'Atas Nama Rekening',                   // V (22)
-            'BPJS Kes',                             // W (23)
-            'BPJS Ket',                             // X (24)
-            'NPWP',                                 // Y (25)
-            'Pasangan',                             // Z (26)
-            'Pekerjaan Pasangan',                   // AA (27)
-            'Jml Anak',                             // AB (28)
-            'Divisi',                               // AC (29)
-            'Departemen / Unit',                    // AD (30)
+            'No',                                    // A (1)
+            'Nama Lengkap*',                         // B (2)
+            'NIP',                                   // C (3)
+            'NIK*',                                  // D (4)
+            'Jenis Kelamin*',                        // E (5)
+            'Tempat Lahir*',                         // F (6)
+            'Tgl Lahir*',                            // G (7)
+            'Pendidikan Terakhir*',                  // H (8)
+            'Nama Ayah*',                            // I (9)
+            'Nama Ibu*',                             // J (10)
+            'Alamat KTP*',                           // K (11)
+            'Alamat Domisili',                       // L (12)
+            'No HP/WA*',                             // M (13)
+            'Email',                                 // N (14)
+            'Jabatan*',                              // O (15)
+            'Unit*',                                 // P (16)
+            'Tanggal Masuk PT Sukun (YYYY-MM-DD)*',  // Q (17)
+            'Pernikahan*',                           // R (18)
+            'Disabilitas',                           // S (19)
+            'Nama Bank',                             // T (20)
+            'No Rekening',                           // U (21)
+            'Atas Nama Rekening',                    // V (22)
+            'BPJS Kes',                              // W (23)
+            'BPJS Ket',                              // X (24)
+            'NPWP',                                  // Y (25)
+            'Pasangan*',                             // Z (26)
+            'Pekerjaan Pasangan',                    // AA (27)
+            'Jml Anak*',                             // AB (28)
+            'Divisi*',                               // AC (29)
+            'Departemen / Unit*',                    // AD (30)
         ];
 
         if (! $isTemplate) {
@@ -406,24 +496,47 @@ class PendataanController extends Controller
 
         array_push(
             $dataHeaders,
-            'Golongan Darah',    // AE (31) [template] / AG (33) [export]
-            'Jenis Karyawan',    // AF (32) / AH (34)
-            'Status Karyawan',   // AG (33) / AI (35)
-            'Bersedia Transfer', // AH (34) / AJ (36)
-            'No Koperasi KKSG'   // AI (35) / AK (37)
+            'Golongan Darah',     // AE (31) [template] / AG (33) [export]
+            'Jenis Karyawan*',    // AF (32) / AH (34)
+            'Status Karyawan*',   // AG (33) / AI (35)
+            'Bersedia Transfer*', // AH (34) / AJ (36)
+            'No Koperasi KKSG'    // AI (35) / AK (37)
         );
 
         for ($i = 1; $i <= $maxPend; $i++) {
-            array_push($dataHeaders, "Pendidikan {$i} - Jenjang", "Pendidikan {$i} - Instansi", "Pendidikan {$i} - Jurusan", "Pendidikan {$i} - Nilai");
+            array_push(
+                $dataHeaders,
+                "Pendidikan {$i} - Jenjang*",
+                "Pendidikan {$i} - Instansi*",
+                "Pendidikan {$i} - Jurusan",
+                "Pendidikan {$i} - Nilai"
+            );
         }
         for ($i = 1; $i <= $maxAnak; $i++) {
-            array_push($dataHeaders, "Anak {$i} - Nama", "Anak {$i} - Tgl Lahir", "Anak {$i} - Pendidikan");
+            array_push(
+                $dataHeaders,
+                "Anak {$i} - Nama*",
+                "Anak {$i} - Tgl Lahir",
+                "Anak {$i} - Pendidikan"
+            );
         }
         for ($i = 1; $i <= $maxKarir; $i++) {
-            array_push($dataHeaders, "Karir Sukun {$i} - Bagian", "Karir Sukun {$i} - Jabatan", "Karir Sukun {$i} - Tahun Mulai", "Karir Sukun {$i} - Tahun Selesai");
+            array_push(
+                $dataHeaders,
+                "Karir Sukun {$i} - Bagian",
+                "Karir Sukun {$i} - Jabatan",
+                "Karir Sukun {$i} - Tahun Mulai",
+                "Karir Sukun {$i} - Tahun Selesai"
+            );
         }
         for ($i = 1; $i <= $maxPeng; $i++) {
-            array_push($dataHeaders, "Pengalaman Luar {$i} - Perusahaan", "Pengalaman Luar {$i} - Jabatan", "Pengalaman Luar {$i} - Tahun Masuk", "Pengalaman Luar {$i} - Tahun Keluar");
+            array_push(
+                $dataHeaders,
+                "Pengalaman Luar {$i} - Perusahaan",
+                "Pengalaman Luar {$i} - Jabatan",
+                "Pengalaman Luar {$i} - Tahun Masuk",
+                "Pengalaman Luar {$i} - Tahun Keluar"
+            );
         }
 
         return $dataHeaders;
@@ -537,15 +650,39 @@ class PendataanController extends Controller
                     $cleanKota   = strtoupper(trim((string) $namaKota));
                     $compactKota = str_replace(' ', '', $cleanKota);
 
-                    $unitId = DB::table('unit_organisasi')
-                        ->when($departemenId, fn ($q) => $q->where('departemen_id', $departemenId))
-                        ->where(function ($q) use ($cleanKota, $compactKota) {
-                            $q->whereRaw('UPPER(TRIM(nama_unit)) = ?', ['PERWAKILAN ' . $cleanKota])
-                                ->orWhere('nama_unit', 'like', '%' . $cleanKota . '%')
-                                ->orWhereRaw("REPLACE(UPPER(nama_unit), ' ', '') LIKE ?", ['%' . $compactKota . '%']);
-                        })
-                        ->where('nama_unit', 'not like', '%PUSAT%')
-                        ->value('id');
+                    $karisidenanKeywords = ['PATI', 'KUDUS', 'JEPARA', 'REMBANG', 'BLORA'];
+                    $isKarisidenanKota   = in_array($cleanKota, $karisidenanKeywords, true);
+                    if (! $isKarisidenanKota) {
+                        foreach ($karisidenanKeywords as $kw) {
+                            if (str_contains($cleanKota, $kw)) {
+                                $isKarisidenanKota = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($isKarisidenanKota) {
+                        $unitId = DB::table('unit_organisasi')
+                            ->when($departemenId, fn ($q) => $q->where('departemen_id', $departemenId))
+                            ->where(function ($q) {
+                                $q->where('nama_unit', 'like', '%KARISIDENAN PATI%')
+                                    ->orWhere('nama_unit', 'like', '%KARESIDENAN PATI%');
+                            })
+                            ->where('nama_unit', 'not like', '%PUSAT%')
+                            ->value('id');
+                    }
+
+                    if (! $unitId) {
+                        $unitId = DB::table('unit_organisasi')
+                            ->when($departemenId, fn ($q) => $q->where('departemen_id', $departemenId))
+                            ->where(function ($q) use ($cleanKota, $compactKota) {
+                                $q->whereRaw('UPPER(TRIM(nama_unit)) = ?', ['PERWAKILAN ' . $cleanKota])
+                                    ->orWhere('nama_unit', 'like', '%' . $cleanKota . '%')
+                                    ->orWhereRaw("REPLACE(UPPER(nama_unit), ' ', '') LIKE ?", ['%' . $compactKota . '%']);
+                            })
+                            ->where('nama_unit', 'not like', '%PUSAT%')
+                            ->value('id');
+                    }
 
                     if (! $unitId && $departemenId) {
                         try {
@@ -646,9 +783,10 @@ class PendataanController extends Controller
             'kota_perwakilan_id' => 'nullable|exists:kota_perwakilan,id',
             'area_id'            => 'nullable|exists:area,id',
 
-            'riwayat_pendidikan'                 => 'required|array|min:1',
-            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
-            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
+            'pendidikan_terakhir'                => 'nullable|string|max:50',
+            'riwayat_pendidikan'                 => 'nullable|array',
+            'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'nullable|string|max:150',
             'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
             'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
 
@@ -702,12 +840,10 @@ class PendataanController extends Controller
             'nama_ibu.required'                         => 'Nama lengkap ibu kandung wajib diisi.',
             'tgl_masuk_bulan.required'                  => 'Bulan masuk kerja wajib dipilih.',
             'tgl_masuk_tahun.required'                  => 'Tahun masuk kerja wajib dipilih.',
-            'riwayat_pendidikan.required'               => 'Riwayat pendidikan wajib diisi minimal 1.',
-            'riwayat_pendidikan.*.jenjang.required'     => 'Jenjang pendidikan wajib dipilih.',
-            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
         ]);
 
         $this->validatePenempatanByTipe($request);
+        $listPend = $this->validateAndFilterRiwayatPendidikan((array) $request->input('riwayat_pendidikan', []));
 
         if (DB::table('karyawan')->where('nik_ktp', $data['nik_ktp'])->exists()) {
             return redirect()->route('pendataan.create')->withErrors([
@@ -756,7 +892,7 @@ class PendataanController extends Controller
 
         $tglMasukKerja = sprintf('%04d-%02d-%02d', $tahun, $bulan, $hari);
 
-        DB::transaction(function () use ($request, $data, $hariDiketahui, $tglMasukKerja, $jumlahAnak, $statusPernikahan, $dataAnakRequest) {
+        DB::transaction(function () use ($request, $data, $listPend, $hariDiketahui, $tglMasukKerja, $jumlahAnak, $statusPernikahan, $dataAnakRequest) {
             $nip   = $this->resolveNip($request->input('nip'));
             $token = bin2hex(random_bytes(32));
 
@@ -764,10 +900,8 @@ class PendataanController extends Controller
             $bankId = $this->resolveBankId($noRek, $request->input('bank_id'), $request->input('nama_bank'));
 
             $penempatan = $this->resolvePenempatan($request);
-            $listPend = array_values(array_filter($data['riwayat_pendidikan'] ?? [], function ($rp) {
-                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-            }));
-            $pendidikanPalingAkhir = ! empty($listPend) ? end($listPend) : [];
+            $pendidikanPalingAkhir = ! empty($listPend) ? end($listPend) : null;
+            $pendTerakhirFallback  = $this->normalizeJenjangPendidikan((string) $request->input('pendidikan_terakhir', '')) ?: 'TIDAK SEKOLAH';
 
             $noWa           = trim((string) $request->input('no_wa', ''));
             $alamatDomisili = trim((string) ($request->input('alamat_domisili') ?: $data['alamat_ktp']));
@@ -786,7 +920,7 @@ class PendataanController extends Controller
                 'tempat_lahir'             => $tempatLahirVal,
                 'tgl_lahir'                => $data['tgl_lahir'],
                 'golongan_darah'           => $request->input('golongan_darah', '-'),
-                'pendidikan_terakhir'      => strtoupper($pendidikanPalingAkhir['jenjang'] ?? 'SD'),
+                'pendidikan_terakhir'      => $pendidikanPalingAkhir ? strtoupper($pendidikanPalingAkhir['jenjang']) : $pendTerakhirFallback,
                 'jurusan'                  => ! empty($pendidikanPalingAkhir['jurusan']) ? strtoupper($pendidikanPalingAkhir['jurusan']) : null,
                 'nama_instansi'            => ! empty($pendidikanPalingAkhir['nama_instansi']) ? strtoupper($pendidikanPalingAkhir['nama_instansi']) : null,
                 'nilai'                    => $pendidikanPalingAkhir['nilai_ipk'] ?? null,
@@ -823,10 +957,10 @@ class PendataanController extends Controller
             foreach ($listPend as $pend) {
                 DB::table('riwayat_pendidikan')->insert([
                     'karyawan_id'   => $karyawanId,
-                    'jenjang'       => strtoupper($pend['jenjang']),
-                    'nama_instansi' => strtoupper($pend['nama_instansi']),
-                    'jurusan'       => ! empty($pend['jurusan']) ? strtoupper($pend['jurusan']) : null,
-                    'nilai_ipk'     => ! empty($pend['nilai_ipk']) ? $pend['nilai_ipk'] : null,
+                    'jenjang'       => $pend['jenjang'],
+                    'nama_instansi' => $pend['nama_instansi'],
+                    'jurusan'       => $pend['jurusan'],
+                    'nilai_ipk'     => $pend['nilai_ipk'],
                     'created_at'    => now(),
                     'updated_at'    => now(),
                 ]);
@@ -1033,9 +1167,10 @@ class PendataanController extends Controller
             'no_bpjs_kesehatan'       => 'nullable|alpha_num|max:30',
             'no_bpjs_ketenagakerjaan' => 'nullable|alpha_num|max:30',
 
-            'riwayat_pendidikan'                 => 'required|array|min:1',
-            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
-            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
+            'pendidikan_terakhir'                => 'nullable|string|max:50',
+            'riwayat_pendidikan'                 => 'nullable|array',
+            'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'nullable|string|max:150',
             'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
             'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
 
@@ -1063,33 +1198,31 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nik_ktp.required'                          => 'Nomor KTP (NIK) wajib diisi.',
-            'nik_ktp.digits'                            => 'Nomor KTP (NIK) harus pas 16 angka.',
-            'nik_ktp.unique'                            => 'Nomor KTP (NIK) sudah digunakan oleh karyawan lain.',
-            'nip.unique'                                => 'NIP sudah terdaftar pada karyawan lain.',
-            'nama_lengkap.required'                     => 'Nama lengkap wajib diisi.',
-            'jenis_kelamin.required'                    => 'Jenis kelamin wajib dipilih.',
-            'tgl_lahir.required'                        => 'Tanggal lahir wajib diisi.',
-            'tgl_lahir.date_format'                     => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
-            'tgl_lahir.after_or_equal'                  => 'Tahun lahir tidak valid (minimal tahun 1940).',
-            'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
-            'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
-            'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.alpha_num'               => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
-            'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
-            'alamat_ktp.required'                       => 'Alamat KTP wajib diisi.',
-            'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
-            'bersedia_transfer.required'                => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
-            'nama_ayah.required'                        => 'Nama lengkap ayah kandung wajib diisi.',
-            'nama_ibu.required'                         => 'Nama lengkap ibu kandung wajib diisi.',
-            'status_pernikahan.required'                => 'Status pernikahan wajib dipilih.',
-            'email.email'                               => 'Format alamat email tidak valid.',
-            'riwayat_pendidikan.required'               => 'Riwayat pendidikan wajib diisi minimal 1.',
-            'riwayat_pendidikan.*.jenjang.required'     => 'Jenjang pendidikan wajib dipilih.',
-            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
+            'nik_ktp.required'                      => 'Nomor KTP (NIK) wajib diisi.',
+            'nik_ktp.digits'                        => 'Nomor KTP (NIK) harus pas 16 angka.',
+            'nik_ktp.unique'                        => 'Nomor KTP (NIK) sudah digunakan oleh karyawan lain.',
+            'nip.unique'                            => 'NIP sudah terdaftar pada karyawan lain.',
+            'nama_lengkap.required'                 => 'Nama lengkap wajib diisi.',
+            'jenis_kelamin.required'                => 'Jenis kelamin wajib dipilih.',
+            'tgl_lahir.required'                    => 'Tanggal lahir wajib diisi.',
+            'tgl_lahir.date_format'                 => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
+            'tgl_lahir.after_or_equal'              => 'Tahun lahir tidak valid (minimal tahun 1940).',
+            'tgl_lahir.before_or_equal'             => 'Tanggal lahir tidak boleh melebihi hari ini.',
+            'anak.*.tgl_lahir_anak.date_format'     => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
+            'anak.*.tgl_lahir_anak.before_or_equal' => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
+            'no_bpjs_kesehatan.alpha_num'           => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'     => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
+            'alamat_ktp.required'                   => 'Alamat KTP wajib diisi.',
+            'no_rekening.regex'                     => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
+            'bersedia_transfer.required'            => 'Pertanyaan kesediaan transfer gaji wajib dipilih.',
+            'nama_ayah.required'                    => 'Nama lengkap ayah kandung wajib diisi.',
+            'nama_ibu.required'                     => 'Nama lengkap ibu kandung wajib diisi.',
+            'status_pernikahan.required'            => 'Status pernikahan wajib dipilih.',
+            'email.email'                           => 'Format alamat email tidak valid.',
         ]);
 
         $this->validatePenempatanByTipe($request, $karyawan);
+        $listP = $this->validateAndFilterRiwayatPendidikan((array) $request->input('riwayat_pendidikan', []));
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
             throw ValidationException::withMessages([
@@ -1134,7 +1267,7 @@ class PendataanController extends Controller
             }
         }
 
-        DB::transaction(function () use ($request, $karyawan, $statusPernikahan, $jumlahAnak, $dataAnakRequest, $tglMasukKerja, $hariDiketahui) {
+        DB::transaction(function () use ($request, $karyawan, $listP, $statusPernikahan, $jumlahAnak, $dataAnakRequest, $tglMasukKerja, $hariDiketahui) {
             $penempatan = $this->resolvePenempatan($request, $karyawan);
 
             $finalNip = $this->resolveNip($request->input('nip'), $karyawan->nip);
@@ -1205,17 +1338,14 @@ class PendataanController extends Controller
             ];
 
             DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
-            $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
-                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-            }));
 
             foreach ($listP as $rp) {
                 DB::table('riwayat_pendidikan')->insert([
                     'karyawan_id'   => $karyawan->id,
-                    'jenjang'       => strtoupper($rp['jenjang']),
-                    'nama_instansi' => strtoupper($rp['nama_instansi']),
-                    'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
-                    'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                    'jenjang'       => $rp['jenjang'],
+                    'nama_instansi' => $rp['nama_instansi'],
+                    'jurusan'       => $rp['jurusan'],
+                    'nilai_ipk'     => $rp['nilai_ipk'],
                     'created_at'    => now(),
                     'updated_at'    => now(),
                 ]);
@@ -1223,10 +1353,16 @@ class PendataanController extends Controller
 
             if (! empty($listP)) {
                 $lastPend = end($listP);
-                $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
-                $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
-                $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
-                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
+                $updateKaryawan['pendidikan_terakhir'] = $lastPend['jenjang'];
+                $updateKaryawan['nama_instansi']       = $lastPend['nama_instansi'];
+                $updateKaryawan['jurusan']             = $lastPend['jurusan'];
+                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'];
+            } else {
+                $pendFallback = $this->normalizeJenjangPendidikan((string) $request->input('pendidikan_terakhir', '')) ?: 'TIDAK SEKOLAH';
+                $updateKaryawan['pendidikan_terakhir'] = $pendFallback;
+                $updateKaryawan['nama_instansi']       = null;
+                $updateKaryawan['jurusan']             = null;
+                $updateKaryawan['nilai']               = null;
             }
 
             DB::table('karyawan')->where('id', $karyawan->id)->update($updateKaryawan);
@@ -1521,9 +1657,10 @@ class PendataanController extends Controller
             'anak.*.tgl_lahir_anak'  => 'nullable|date|date_format:Y-m-d|after_or_equal:1970-01-01|before_or_equal:' . $today,
             'anak.*.pendidikan_anak' => 'nullable|string|max:50',
 
-            'riwayat_pendidikan'                 => 'required|array|min:1',
-            'riwayat_pendidikan.*.jenjang'       => 'required|string|max:50',
-            'riwayat_pendidikan.*.nama_instansi' => 'required|string|max:150',
+            'pendidikan_terakhir'                => 'nullable|string|max:50',
+            'riwayat_pendidikan'                 => 'nullable|array',
+            'riwayat_pendidikan.*.jenjang'       => 'nullable|string|max:50',
+            'riwayat_pendidikan.*.nama_instansi' => 'nullable|string|max:150',
             'riwayat_pendidikan.*.jurusan'       => 'nullable|string|max:150',
             'riwayat_pendidikan.*.nilai_ipk'     => 'nullable|string|max:50',
 
@@ -1539,22 +1676,20 @@ class PendataanController extends Controller
             'riwayat_sukun.*.tahun_mulai'   => 'nullable|string|max:10',
             'riwayat_sukun.*.tahun_selesai' => 'nullable|string|max:10',
         ], [
-            'nip.unique'                                => 'NIP sudah terdaftar pada karyawan lain.',
-            'alamat_domisili.required'                  => 'Alamat domisili saat ini wajib diisi.',
-            'tgl_lahir.date_format'                     => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
-            'tgl_lahir.after_or_equal'                  => 'Tahun lahir tidak valid (minimal tahun 1940).',
-            'tgl_lahir.before_or_equal'                 => 'Tanggal lahir tidak boleh melebihi hari ini.',
-            'anak.*.tgl_lahir_anak.date_format'         => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
-            'anak.*.tgl_lahir_anak.before_or_equal'     => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
-            'no_bpjs_kesehatan.alpha_num'               => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
-            'no_bpjs_ketenagakerjaan.alpha_num'         => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
-            'no_rekening.regex'                         => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
-            'riwayat_pendidikan.required'               => 'Riwayat pendidikan wajib diisi minimal 1.',
-            'riwayat_pendidikan.*.jenjang.required'     => 'Jenjang pendidikan wajib dipilih.',
-            'riwayat_pendidikan.*.nama_instansi.required' => 'Nama sekolah / universitas wajib diisi.',
+            'nip.unique'                            => 'NIP sudah terdaftar pada karyawan lain.',
+            'alamat_domisili.required'              => 'Alamat domisili saat ini wajib diisi.',
+            'tgl_lahir.date_format'                 => 'Format tanggal lahir tidak valid (tahun harus 4 digit).',
+            'tgl_lahir.after_or_equal'              => 'Tahun lahir tidak valid (minimal tahun 1940).',
+            'tgl_lahir.before_or_equal'             => 'Tanggal lahir tidak boleh melebihi hari ini.',
+            'anak.*.tgl_lahir_anak.date_format'     => 'Format tanggal lahir anak tidak valid (tahun harus 4 digit).',
+            'anak.*.tgl_lahir_anak.before_or_equal' => 'Tanggal lahir anak tidak boleh melebihi hari ini.',
+            'no_bpjs_kesehatan.alpha_num'           => 'Nomor BPJS Kesehatan hanya boleh berisi huruf dan angka.',
+            'no_bpjs_ketenagakerjaan.alpha_num'     => 'Nomor BPJS Ketenagakerjaan hanya boleh berisi huruf dan angka.',
+            'no_rekening.regex'                     => 'Jika diisi, nomor rekening harus 9-10 angka untuk BNI atau 15 angka untuk BRI.',
         ]);
 
         $this->validatePenempatanByTipe($request, $karyawan);
+        $listP = $this->validateAndFilterRiwayatPendidikan((array) $request->input('riwayat_pendidikan', []));
 
         if ($request->input('status_pernikahan') === 'KAWIN' && trim((string) $request->input('nama_pasangan', '')) === '') {
             throw ValidationException::withMessages([
@@ -1578,7 +1713,7 @@ class PendataanController extends Controller
             }
         }
 
-        DB::transaction(function () use ($request, $karyawan, $statusPernikahan, $jumlahAnak, $dataAnakRequest) {
+        DB::transaction(function () use ($request, $karyawan, $listP, $statusPernikahan, $jumlahAnak, $dataAnakRequest) {
             $penempatan = $this->resolvePenempatan($request, $karyawan);
 
             $finalNip = $this->resolveNip($request->input('nip'), $karyawan->nip);
@@ -1647,17 +1782,14 @@ class PendataanController extends Controller
             ];
 
             DB::table('riwayat_pendidikan')->where('karyawan_id', $karyawan->id)->delete();
-            $listP = array_values(array_filter($request->input('riwayat_pendidikan', []), function ($rp) {
-                return ! empty($rp['jenjang']) && ! empty($rp['nama_instansi']);
-            }));
 
             foreach ($listP as $rp) {
                 DB::table('riwayat_pendidikan')->insert([
                     'karyawan_id'   => $karyawan->id,
-                    'jenjang'       => strtoupper($rp['jenjang']),
-                    'nama_instansi' => strtoupper($rp['nama_instansi']),
-                    'jurusan'       => ! empty($rp['jurusan']) ? strtoupper($rp['jurusan']) : null,
-                    'nilai_ipk'     => ! empty($rp['nilai_ipk']) ? $rp['nilai_ipk'] : null,
+                    'jenjang'       => $rp['jenjang'],
+                    'nama_instansi' => $rp['nama_instansi'],
+                    'jurusan'       => $rp['jurusan'],
+                    'nilai_ipk'     => $rp['nilai_ipk'],
                     'created_at'    => now(),
                     'updated_at'    => now(),
                 ]);
@@ -1665,10 +1797,16 @@ class PendataanController extends Controller
 
             if (! empty($listP)) {
                 $lastPend = end($listP);
-                $updateKaryawan['pendidikan_terakhir'] = strtoupper($lastPend['jenjang']);
-                $updateKaryawan['nama_instansi']       = strtoupper($lastPend['nama_instansi']);
-                $updateKaryawan['jurusan']             = ! empty($lastPend['jurusan']) ? strtoupper($lastPend['jurusan']) : null;
-                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'] ?? null;
+                $updateKaryawan['pendidikan_terakhir'] = $lastPend['jenjang'];
+                $updateKaryawan['nama_instansi']       = $lastPend['nama_instansi'];
+                $updateKaryawan['jurusan']             = $lastPend['jurusan'];
+                $updateKaryawan['nilai']               = $lastPend['nilai_ipk'];
+            } else {
+                $pendFallback = $this->normalizeJenjangPendidikan((string) $request->input('pendidikan_terakhir', '')) ?: 'TIDAK SEKOLAH';
+                $updateKaryawan['pendidikan_terakhir'] = $pendFallback;
+                $updateKaryawan['nama_instansi']       = null;
+                $updateKaryawan['jurusan']             = null;
+                $updateKaryawan['nilai']               = null;
             }
 
             DB::table('karyawan')->where('id', $karyawan->id)->update($updateKaryawan);
@@ -1745,7 +1883,7 @@ class PendataanController extends Controller
     {
         $this->ensureCanManageKaryawan('Anda tidak memiliki akses untuk mengunduh template import.');
 
-        @ini_set('memory_limit', '256M');
+        $this->ensureMemoryLimit('256M');
         DB::disableQueryLog();
 
         $spreadsheet = new Spreadsheet();
@@ -1811,12 +1949,12 @@ class PendataanController extends Controller
 
         $petunjuk = [
             ['1. Sheet DATA', 'Isi data karyawan mulai dari baris ke-2 di sheet DATA. Jangan mengubah nama header pada baris ke-1.'],
-            ['2. Kolom Wajib', 'Kolom NIK (harus 16 digit angka), Nama Lengkap, Jenis Kelamin, Tgl Lahir, Alamat KTP, Unit (untuk non-DISTRIBUSI), Tanggal Masuk PT Sukun (YYYY-MM-DD), Pernikahan (+ Pasangan jika KAWIN), Nama Ayah, Nama Ibu, Jenis Karyawan, Status Karyawan, Bersedia Transfer, dan minimal 1 Riwayat Pendidikan wajib diisi. Jika kosong/tidak valid, baris ditolak saat import.'],
-            ['3. Kolom Angka & Teks', 'Kolom NIK, NIP, No HP/WA, No Rekening, BPJS, NPWP, dan No Koperasi sudah diformat sebagai TEXT (@) agar angka 0 di depan tidak hilang dan NIK tidak berubah menjadi E+15.'],
-            ['4. Format Tanggal', 'Untuk Tgl Lahir dan Tanggal Masuk PT Sukun (YYYY-MM-DD), gunakan format YYYY-MM-DD (contoh: 1995-08-17) atau DD/MM/YYYY (contoh: 17/08/1995).'],
+            ['2. Kolom Bertanda (*)', 'Kolom dengan tanda bintang (*) menandakan kolom wajib diisi atau wajib bersyarat (misal Pasangan* wajib jika KAWIN, Anak* wajib jika memiliki anak).'],
+            ['3. Kolom Angka & Teks', 'Kolom NIK*, NIP, No HP/WA*, No Rekening, BPJS, NPWP, dan No Koperasi sudah diformat sebagai TEXT (@) agar angka 0 di depan tidak hilang dan NIK tidak berubah menjadi E+15.'],
+            ['4. Format Tanggal', 'Untuk Tgl Lahir* dan Tanggal Masuk PT Sukun (YYYY-MM-DD)*, gunakan format YYYY-MM-DD (contoh: 1995-08-17) atau DD/MM/YYYY (contoh: 17/08/1995).'],
             ['5. Bank & Rekening', 'Isi Nama Bank (misal BRI / BNI), No Rekening (angka saja), dan Atas Nama Rekening. Jika Nama Bank dikosongkan, sistem mendeteksi otomatis dari panjang digit rekening (15 digit = BRI, 9-10 digit = BNI).'],
-            ['6. Riwayat Pendidikan', 'Khusus jenjang pendidikan dari SD sampai SMA/SMK, kolom Jurusan dan Nilai/IPK tidak wajib diisi (boleh dikosongkan atau diisi "-").'],
-            ['7. Dropdown Otomatis', 'Kolom Jenis Kelamin, Unit, Pernikahan, Nama Bank, Jenis Karyawan, Status Karyawan, Jenjang Pendidikan, dan Pendidikan Anak sudah dilengkapi dropdown.'],
+            ['6. Riwayat Pendidikan', 'Jika karyawan tidak sekolah, pilih TIDAK SEKOLAH pada Pendidikan Terakhir* dan kosongkan kolom Pendidikan 1 (atau isi "-"). Jika diisi, yang wajib hanya Jenjang* dan Instansi* (Jurusan dan Nilai opsional).'],
+            ['7. Dropdown Otomatis', 'Kolom Jenis Kelamin*, Unit*, Pernikahan*, Nama Bank, Jenis Karyawan*, Status Karyawan*, Jenjang Pendidikan*, dan Pendidikan Anak sudah dilengkapi dropdown.'],
         ];
         $rP = 3;
         foreach ($petunjuk as $p) {
@@ -1832,13 +1970,13 @@ class PendataanController extends Controller
         $maxTemplateRow = 500;
 
         foreach (['C', 'D', 'M', 'U', 'W', 'X', 'Y', 'AI'] as $textCol) {
-            $wsData->getStyle("{$textCol}2:{$textCol}{$maxTemplateRow}")
+            $wsData->getStyle($textCol)
                 ->getNumberFormat()
                 ->setFormatCode(NumberFormat::FORMAT_TEXT);
         }
 
         foreach (['G', 'Q'] as $dateCol) {
-            $wsData->getStyle("{$dateCol}2:{$dateCol}{$maxTemplateRow}")
+            $wsData->getStyle($dateCol)
                 ->getNumberFormat()
                 ->setFormatCode('yyyy-mm-dd');
         }
@@ -1873,17 +2011,26 @@ class PendataanController extends Controller
         if (! is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
+        $this->cleanupOldTempFiles($tempDir);
 
         $fileName = 'TEMPLATE_IMPORT_KARYAWAN_PT_SWI.xlsx';
-        $writer   = new Xlsx($spreadsheet);
-        $writer->setPreCalculateFormulas(false);
-        $writer->setUseDiskCaching(true, $tempDir);
-
         $tempFile = tempnam($tempDir, 'swi_tpl_');
-        $writer->save($tempFile);
 
-        $spreadsheet->disconnectWorksheets();
-        unset($spreadsheet, $writer);
+        try {
+            $writer = new Xlsx($spreadsheet);
+            $writer->setPreCalculateFormulas(false);
+            $writer->setUseDiskCaching(true, $tempDir);
+            $writer->save($tempFile);
+        } catch (\Throwable $e) {
+            if ($tempFile && is_file($tempFile)) {
+                @unlink($tempFile);
+            }
+            throw $e;
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet, $writer);
+            gc_collect_cycles();
+        }
 
         return response()->download($tempFile, $fileName, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1902,515 +2049,650 @@ class PendataanController extends Controller
         ]);
 
         @set_time_limit(300);
-        @ini_set('memory_limit', '512M');
+        $this->ensureMemoryLimit('512M');
         DB::disableQueryLog();
+        gc_enable();
 
-        $filePath = $request->file('file_excel')->getRealPath();
-        $reader   = IOFactory::createReaderForFile($filePath);
-        $reader->setReadDataOnly(true);
-
-        if (method_exists($reader, 'listWorksheetNames') && method_exists($reader, 'setLoadSheetsOnly')) {
-            $sheetNames = $reader->listWorksheetNames($filePath);
-            if (in_array('DATA', $sheetNames, true)) {
-                $reader->setLoadSheetsOnly(['DATA']);
-            } elseif (! empty($sheetNames)) {
-                $reader->setLoadSheetsOnly([$sheetNames[0]]);
-            }
+        if (session()->isStarted()) {
+            session()->save();
         }
 
-        $spreadsheet = $reader->load($filePath);
-        $sheet       = $spreadsheet->getSheetByName('DATA') ?: $spreadsheet->getActiveSheet();
-
-        $highestRow    = $sheet->getHighestDataRow();
-        $highestColIdx = Coordinate::columnIndexFromString($sheet->getHighestDataColumn());
-
-        if ($highestRow < 2) {
-            $spreadsheet->disconnectWorksheets();
-            unset($spreadsheet);
-            return back()->with('import_errors', ['Sheet DATA kosong, tidak ada baris data untuk diimport.']);
-        }
-
-        $headerMap = [];
-        for ($col = 1; $col <= $highestColIdx; $col++) {
-            $colLetter = Coordinate::stringFromColumnIndex($col);
-            $rawHeader = strtoupper(trim((string) $sheet->getCell($colLetter . '1')->getValue()));
-            if ($rawHeader !== '') {
-                $headerMap[$rawHeader] = $colLetter;
-            }
-        }
-
-        $getVal = function (int $row, array $aliases) use ($sheet, $headerMap): string {
-            foreach ($aliases as $alias) {
-                $key = strtoupper($alias);
-                if (! isset($headerMap[$key])) {
-                    continue;
-                }
-
-                $cell = $sheet->getCell($headerMap[$key] . $row);
-                $raw  = $cell->getValue();
-
-                if ($raw === null) {
-                    return '';
-                }
-
-                if ($cell->isFormula()) {
-                    $str = (string) $cell->getCalculatedValue();
-                } elseif (is_float($raw) || is_int($raw)) {
-                    $str = sprintf('%.0f', $raw);
-                } else {
-                    $str = (string) $raw;
-                }
-
-                $str = trim(ltrim($str, "'"));
-                return ($str === '-') ? '' : $str;
-            }
-            return '';
-        };
-
-        $unitMap = [];
-        foreach (DB::table('unit_organisasi')->get() as $u) {
-            $unitMap[strtoupper(trim($u->nama_unit))] = [
-                'id'            => $u->id,
-                'departemen_id' => $u->departemen_id,
-            ];
-        }
-
-        $deptMap = [];
-        foreach (DB::table('departemen')->get() as $d) {
-            $deptMap[strtoupper(trim($d->nama_departemen))] = $d->id;
-        }
-
-        $kotaMap = [];
-        foreach (DB::table('kota_perwakilan')->get() as $k) {
-            $kotaMap[strtoupper(trim($k->nama_kota))] = [
-                'id'      => $k->id,
-                'area_id' => $k->area_id ?? null,
-            ];
-        }
-
-        $existingKaryawanByNik = [];
-        $existingNips          = [];
-        foreach (DB::table('karyawan')->select('nik_ktp', 'nama_lengkap', 'nip')->get() as $ek) {
-            if ($ek->nik_ktp !== null && $ek->nik_ktp !== '') {
-                $existingKaryawanByNik[$ek->nik_ktp] = [
-                    'nama_lengkap' => $ek->nama_lengkap,
-                    'nip'          => $ek->nip,
-                ];
-            }
-            if ($ek->nip !== null && $ek->nip !== '') {
-                $existingNips[$ek->nip] = true;
-            }
-        }
-
-        $insertedCount = 0;
-        $duplicates    = [];
-        $errors        = [];
-
-        for ($r = 2; $r <= $highestRow; $r++) {
-            $nikRaw = preg_replace('/[^0-9]/', '', $getVal($r, ['NIK', 'NIK KTP']));
-            $nama   = strtoupper($getVal($r, ['NAMA LENGKAP']));
-
-            if ($nikRaw === '' && $nama === '') {
-                continue;
-            }
-
-            if (strlen($nikRaw) !== 16) {
-                $errors[] = "Baris {$r} ({$nama}): NIK '{$nikRaw}' tidak valid (wajib 16 digit).";
-                continue;
-            }
-
-            $missingFields = [];
-
-            if ($nama === '') {
-                $missingFields[] = 'Nama Lengkap';
-            }
-
-            $jkRaw = strtoupper(trim($getVal($r, ['JENIS KELAMIN'])));
-            if (! in_array($jkRaw, ['L', 'P'], true)) {
-                $missingFields[] = 'Jenis Kelamin (wajib diisi L atau P)';
-            }
-
-            $tglLahirParsed = $this->normalizeExcelDate($getVal($r, ['TGL LAHIR', 'TANGGAL LAHIR']));
-            if (! $tglLahirParsed) {
-                $missingFields[] = 'Tgl Lahir (wajib format YYYY-MM-DD, tahun 4 digit valid)';
-            }
-
-            $alamatKtpCheck = trim($getVal($r, ['ALAMAT KTP']));
-            if ($alamatKtpCheck === '') {
-                $missingFields[] = 'Alamat KTP';
-            }
-
-            $namaAyahCheck = trim($getVal($r, ['NAMA AYAH']));
-            if ($namaAyahCheck === '') {
-                $missingFields[] = 'Nama Ayah';
-            }
-
-            $namaIbuCheck = trim($getVal($r, ['NAMA IBU']));
-            if ($namaIbuCheck === '') {
-                $missingFields[] = 'Nama Ibu';
-            }
-
-            $tglMasukRaw = $getVal($r, [
-                'TANGGAL MASUK PT SUKUN (YYYY-MM-DD)',
-                'MASUK PT SUKUN',
-                'TGL MASUK',
-                'TANGGAL MASUK',
+        $lock = Cache::lock('pendataan_import_excel_lock', 300);
+        if (! $lock->get()) {
+            return back()->with('import_errors', [
+                'Proses Import Excel sedang berjalan oleh pengguna lain. Silakan tunggu beberapa saat lalu coba lagi.',
             ]);
-            $tglMasukHariDiketahui = true;
-            $tglMasukParsed        = null;
+        }
 
-            if (preg_match('/^\d{4}$/', $tglMasukRaw)) {
-                $yr = (int) $tglMasukRaw;
-                if ($yr >= 1970 && $yr <= (int) date('Y')) {
-                    $tglMasukParsed        = $tglMasukRaw . '-01-01';
-                    $tglMasukHariDiketahui = false;
-                }
-            } elseif (preg_match('/^(\d{4})-(\d{2})$/', $tglMasukRaw, $ym)) {
-                $yr = (int) $ym[1];
-                $mo = (int) $ym[2];
-                if ($yr >= 1970 && $yr <= (int) date('Y') && $mo >= 1 && $mo <= 12) {
-                    $tglMasukParsed        = $tglMasukRaw . '-01';
-                    $tglMasukHariDiketahui = false;
-                }
-            } else {
-                $tglMasukParsed = $this->normalizeExcelDate($tglMasukRaw);
-            }
+        try {
+            $filePath = $request->file('file_excel')->getRealPath();
+            $reader   = IOFactory::createReaderForFile($filePath);
+            $reader->setReadDataOnly(true);
 
-            if (! $tglMasukParsed) {
-                $missingFields[] = 'Tanggal Masuk PT Sukun (YYYY-MM-DD)';
-            }
+            $targetSheetName = null;
+            $highestRow      = 0;
+            $highestColStr   = 'BZ';
 
-            $tipeKaryawan = strtoupper(trim($getVal($r, ['JENIS KARYAWAN'])));
-            if (! in_array($tipeKaryawan, ['BULANAN', 'HARIAN', 'BORONG', 'DISTRIBUSI'], true)) {
-                $missingFields[] = 'Jenis Karyawan (wajib diisi BULANAN / HARIAN / BORONG / DISTRIBUSI)';
-            }
-
-            $ketKaryawan = str_replace(' ', '_', strtoupper(trim($getVal($r, ['STATUS KARYAWAN']))));
-            if (! in_array($ketKaryawan, ['TETAP', 'HARIAN_LEPAS', 'KONTRAK'], true)) {
-                $missingFields[] = 'Status Karyawan (wajib diisi TETAP / HARIAN_LEPAS / KONTRAK)';
-            }
-
-            $unitNama = strtoupper($getVal($r, ['UNIT', 'DEPARTEMEN / UNIT']));
-            $divNama  = strtoupper($getVal($r, ['DIVISI']));
-            $unitId   = $unitMap[$unitNama]['id'] ?? null;
-            $deptId   = $unitMap[$unitNama]['departemen_id'] ?? ($deptMap[$divNama] ?? null);
-
-            if ($tipeKaryawan !== 'DISTRIBUSI' && ! $unitId) {
-                $missingFields[] = $unitNama === ''
-                    ? 'Unit (wajib diisi untuk karyawan non-DISTRIBUSI)'
-                    : "Unit '{$unitNama}' tidak ditemukan di sheet MASTER";
-            }
-
-            $statusNikah = str_replace(' ', '_', strtoupper(trim($getVal($r, ['PERNIKAHAN', 'STATUS PERNIKAHAN']))));
-            if (! in_array($statusNikah, ['BELUM_KAWIN', 'KAWIN', 'CERAI_HIDUP', 'CERAI_MATI'], true)) {
-                $missingFields[] = 'Pernikahan (wajib diisi BELUM_KAWIN / KAWIN / CERAI_HIDUP / CERAI_MATI)';
-            }
-
-            $namaPasangan = strtoupper($getVal($r, ['PASANGAN', 'NAMA PASANGAN']));
-            if ($statusNikah === 'KAWIN' && $namaPasangan === '') {
-                $missingFields[] = 'Pasangan (wajib diisi jika status KAWIN)';
-            }
-
-            if ($statusNikah !== '' && $statusNikah !== 'BELUM_KAWIN') {
-                $jmlAnakExcel = (int) preg_replace('/[^0-9]/', '', $getVal($r, ['JML ANAK', 'JUMLAH ANAK']));
-                for ($ai = 1; $ai <= max($jmlAnakExcel, 10); $ai++) {
-                    $namaAnakCheck = trim($getVal($r, ["ANAK {$ai} - NAMA", "NAMA ANAK {$ai}"]));
-                    $tglAnakCheck  = trim($getVal($r, ["ANAK {$ai} - TGL LAHIR", "TGL LAHIR ANAK {$ai}"]));
-                    $pendAnakCheck = trim($getVal($r, ["ANAK {$ai} - PENDIDIKAN", "PENDIDIKAN ANAK {$ai}"]));
-
-                    if (($ai <= $jmlAnakExcel || $tglAnakCheck !== '' || $pendAnakCheck !== '') && $namaAnakCheck === '') {
-                        $missingFields[] = "Anak {$ai} - Nama (wajib diisi)";
+            if (method_exists($reader, 'listWorksheetInfo')) {
+                $worksheetInfo = $reader->listWorksheetInfo($filePath);
+                foreach ($worksheetInfo as $info) {
+                    if ($targetSheetName === null || strtoupper((string) $info['worksheetName']) === 'DATA') {
+                        $targetSheetName = (string) $info['worksheetName'];
+                        $highestRow      = (int) ($info['totalRows'] ?? 0);
+                        $highestColStr   = (string) ($info['lastColumnLetter'] ?? 'BZ');
+                        if (strtoupper($targetSheetName) === 'DATA') {
+                            break;
+                        }
                     }
                 }
             }
 
-            $bersediaTransfer = strtoupper(trim($getVal($r, ['BERSEDIA TRANSFER'])));
-            if (! in_array($bersediaTransfer, ['YA', 'TIDAK'], true)) {
-                $missingFields[] = 'Bersedia Transfer (wajib diisi YA / TIDAK)';
+            if ($targetSheetName !== null && method_exists($reader, 'setLoadSheetsOnly')) {
+                $reader->setLoadSheetsOnly([$targetSheetName]);
             }
 
-            $noRekCheck = $this->normalizeRekening($getVal($r, ['NO REKENING']));
-            if ($noRekCheck !== '' && preg_match('/^(?:[0-9]{9,10}|[0-9]{15})$/', $noRekCheck) !== 1) {
-                $missingFields[] = 'No Rekening (jika diisi harus 9-10 digit untuk BNI atau 15 digit untuk BRI)';
+            $headerFilter = new class implements IReadFilter {
+                public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+                {
+                    return $row === 1;
+                }
+            };
+            $reader->setReadFilter($headerFilter);
+            $headerSpreadsheet = $reader->load($filePath);
+            $headerSheet       = $targetSheetName
+                ? ($headerSpreadsheet->getSheetByName($targetSheetName) ?: $headerSpreadsheet->getActiveSheet())
+                : $headerSpreadsheet->getActiveSheet();
+
+            if ($highestRow <= 0) {
+                $highestRow = $headerSheet->getHighestDataRow();
             }
+            $headerMaxColIdx = min(
+                Coordinate::columnIndexFromString($headerSheet->getHighestDataColumn()),
+                Coordinate::columnIndexFromString($highestColStr)
+            );
 
-            $bpjsKesCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KES', 'NO BPJS KESEHATAN'])));
-            $bpjsKetCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KET', 'NO BPJS KETENAGAKERJAAN'])));
-
-            $hasPendidikanValid = false;
-            for ($pi = 1; $pi <= 10; $pi++) {
-                $jenjangCheck  = $this->normalizeJenjangPendidikan($getVal($r, ["PENDIDIKAN {$pi} - JENJANG"]));
-                $instansiCheck = trim($getVal($r, ["PENDIDIKAN {$pi} - INSTANSI"]));
-                if ($jenjangCheck !== '' && $instansiCheck !== '') {
-                    $hasPendidikanValid = true;
-                    break;
+            $headerMap  = [];
+            $maxUsedCol = 1;
+            for ($col = 1; $col <= $headerMaxColIdx; $col++) {
+                $colLetter   = Coordinate::stringFromColumnIndex($col);
+                $rawHeader   = strtoupper(trim((string) $headerSheet->getCell($colLetter . '1')->getValue()));
+                $cleanHeader = trim(rtrim($rawHeader, '*'));
+                if ($cleanHeader !== '') {
+                    $headerMap[$cleanHeader] = $colLetter;
+                    $maxUsedCol              = $col;
                 }
             }
-            if (! $hasPendidikanValid) {
-                $missingFields[] = 'Riwayat Pendidikan (minimal 1: Jenjang + Instansi)';
+
+            $headerSpreadsheet->disconnectWorksheets();
+            unset($headerSpreadsheet, $headerSheet);
+            gc_collect_cycles();
+
+            if ($highestRow < 2 || empty($headerMap)) {
+                return back()->with('import_errors', ['Sheet DATA kosong, tidak ada baris data untuk diimport.']);
             }
 
-            if (! empty($missingFields)) {
-                $errors[] = "Baris {$r} ({$nama}): data wajib belum valid/lengkap - " . implode(', ', $missingFields) . '.';
-                continue;
-            }
-
-            if (isset($existingKaryawanByNik[$nikRaw])) {
-                $sudahAda     = $existingKaryawanByNik[$nikRaw];
-                $duplicates[] = [
-                    'baris' => $r,
-                    'nik'   => $nikRaw,
-                    'nama'  => $nama ?: $sudahAda['nama_lengkap'],
+            $unitMap     = [];
+            $unitIdToRow = [];
+            foreach (DB::table('unit_organisasi')->get() as $u) {
+                $unitMap[strtoupper(trim($u->nama_unit))] = [
+                    'id'            => $u->id,
+                    'departemen_id' => $u->departemen_id,
                 ];
-                continue;
+                $unitIdToRow[$u->id] = [
+                    'departemen_id' => $u->departemen_id,
+                    'nama_unit'     => strtoupper(trim($u->nama_unit)),
+                ];
             }
 
-            DB::beginTransaction();
-            try {
-                $nipInput = $getVal($r, ['NIP']);
-                if ($nipInput !== '' && isset($existingNips[$nipInput])) {
-                    $nipInput = '';
-                }
-                $finalNip = $this->resolveNip($nipInput);
+            $deptMap      = [];
+            $deptIdToName = [];
+            foreach (DB::table('departemen')->get() as $d) {
+                $upperDept                  = strtoupper(trim($d->nama_departemen));
+                $deptMap[$upperDept]        = $d->id;
+                $deptIdToName[(int) $d->id] = $upperDept;
+            }
 
-                $jk          = $jkRaw;
-                $tempatLahir = strtoupper($getVal($r, ['TEMPAT LAHIR'])) ?: null;
-                $tglLahir    = $tglLahirParsed;
-                $golDarah    = strtoupper($getVal($r, ['GOLONGAN DARAH'])) ?: '-';
+            $kotaMap = [];
+            foreach (DB::table('kota_perwakilan')->get() as $k) {
+                $kotaMap[strtoupper(trim($k->nama_kota))] = [
+                    'id'      => $k->id,
+                    'area_id' => $k->area_id ?? null,
+                ];
+            }
 
-                $namaAyah       = strtoupper($getVal($r, ['NAMA AYAH']));
-                $namaIbu        = strtoupper($getVal($r, ['NAMA IBU']));
-                $alamatKtp      = $alamatKtpCheck;
-                $alamatDomisili = $getVal($r, ['ALAMAT DOMISILI']) ?: $alamatKtp;
+            $bankExactMap = [];
+            foreach (DB::table('bank')->get() as $b) {
+                $bankExactMap[strtoupper(trim($b->nama_bank))] = (int) $b->id;
+            }
+            $briBankId = $bankExactMap['BRI'] ?? null;
+            $bniBankId = $bankExactMap['BNI'] ?? null;
 
-                $noWaRaw = preg_replace('/[^0-9+]/', '', $getVal($r, ['NO HP/WA', 'NO WA']));
-                if ($noWaRaw !== '' && str_starts_with($noWaRaw, '8')) {
-                    $noWaRaw = '0' . $noWaRaw;
-                } elseif ($noWaRaw !== '' && str_starts_with($noWaRaw, '628')) {
-                    $noWaRaw = '0' . substr($noWaRaw, 2);
-                } elseif ($noWaRaw !== '' && str_starts_with($noWaRaw, '+628')) {
-                    $noWaRaw = '0' . substr($noWaRaw, 3);
-                }
-                $noWa = $noWaRaw;
-
-                $email       = $getVal($r, ['EMAIL']) ?: null;
-                $disabilitas = $getVal($r, ['DISABILITAS']) ?: null;
-                $npwp        = $this->normalizeNpwp($getVal($r, ['NPWP']));
-                $jabatan     = strtoupper($getVal($r, ['JABATAN'])) ?: null;
-
-                $kotaId = null;
-                $areaId = null;
-                if ($tipeKaryawan === 'DISTRIBUSI' && $unitNama !== '') {
-                    $cleanKotaKey = trim(str_replace('PERWAKILAN', '', $unitNama));
-                    if (isset($kotaMap[$cleanKotaKey])) {
-                        $kotaId = $kotaMap[$cleanKotaKey]['id'];
-                        $areaId = $kotaMap[$cleanKotaKey]['area_id'];
+            $resolveBankFast = function (string $noRek, string $namaBankRaw) use ($bankExactMap, $briBankId, $bniBankId): ?int {
+                $cleanBank = strtoupper(trim($namaBankRaw));
+                if ($cleanBank !== '' && $cleanBank !== '-') {
+                    if (isset($bankExactMap[$cleanBank])) {
+                        return $bankExactMap[$cleanBank];
+                    }
+                    foreach ($bankExactMap as $bName => $bId) {
+                        if (str_contains($bName, $cleanBank)) {
+                            return $bId;
+                        }
                     }
                 }
 
-                $subReq = new Request([
-                    'tipe_karyawan'      => $tipeKaryawan,
-                    'unit_organisasi_id' => $unitId,
-                    'nama_jabatan'       => $jabatan,
-                    'kota_perwakilan_id' => $kotaId,
-                    'area_id'            => $areaId,
-                ]);
-                $penempatan = $this->resolvePenempatan($subReq, (object) [
-                    'departemen_id'      => $deptId,
-                    'unit_organisasi_id' => $unitId,
-                    'nama_jabatan'       => $jabatan,
-                ]);
+                $len = strlen($noRek);
+                if ($len === 15) {
+                    return $briBankId;
+                }
+                if ($len === 9 || $len === 10) {
+                    return $bniBankId;
+                }
 
-                $noRek          = $noRekCheck;
-                $namaBankRaw    = $getVal($r, ['NAMA BANK', 'BANK']);
-                $bankId         = $this->resolveBankId($noRek, null, $namaBankRaw);
-                $namaPemilikRek = strtoupper($getVal($r, ['ATAS NAMA REKENING', 'NAMA PEMILIK REKENING'])) ?: $nama;
+                return null;
+            };
 
-                $bpjsKes = $bpjsKesCheck !== '' ? $bpjsKesCheck : null;
-                $bpjsKet = $bpjsKetCheck !== '' ? $bpjsKetCheck : null;
-                $noKop   = trim($getVal($r, ['NO KOPERASI KKSG', 'NO ANGGOTA KOPERASI'])) ?: null;
+            $existingKaryawanByNik = [];
+            $existingNips          = [];
+            foreach (DB::table('karyawan')->select('nik_ktp', 'nama_lengkap', 'nip')->get() as $ek) {
+                if ($ek->nik_ktp !== null && $ek->nik_ktp !== '') {
+                    $existingKaryawanByNik[$ek->nik_ktp] = [
+                        'nama_lengkap' => $ek->nama_lengkap,
+                        'nip'          => $ek->nip,
+                    ];
+                }
+                if ($ek->nip !== null && $ek->nip !== '') {
+                    $existingNips[$ek->nip] = true;
+                }
+            }
 
-                $parsedPend = [];
-                for ($i = 1; $i <= 10; $i++) {
-                    $jenjangRaw = $getVal($r, ["PENDIDIKAN {$i} - JENJANG"]);
-                    $jenjang    = $this->normalizeJenjangPendidikan($jenjangRaw);
-                    $instansi   = strtoupper($getVal($r, ["PENDIDIKAN {$i} - INSTANSI"]));
-                    $jurusan    = strtoupper($getVal($r, ["PENDIDIKAN {$i} - JURUSAN"])) ?: null;
-                    $nilai      = $getVal($r, ["PENDIDIKAN {$i} - NILAI"]) ?: null;
+            $insertedCount = 0;
+            $duplicates    = [];
+            $errors        = [];
 
-                    if ($jenjang !== '' && $instansi !== '') {
-                        $parsedPend[] = [
-                            'jenjang'       => $jenjang,
-                            'nama_instansi' => $instansi,
-                            'jurusan'       => $jurusan,
-                            'nilai_ipk'     => $nilai,
-                        ];
+            $chunkSize   = 250;
+            $chunkFilter = new class($maxUsedCol) implements IReadFilter {
+                private int $startRow = 2;
+                private int $endRow   = 2;
+                private int $maxCol;
+
+                public function __construct(int $maxCol)
+                {
+                    $this->maxCol = $maxCol;
+                }
+
+                public function setRows(int $startRow, int $chunkSize): void
+                {
+                    $this->startRow = $startRow;
+                    $this->endRow   = $startRow + $chunkSize - 1;
+                }
+
+                public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+                {
+                    if ($row < $this->startRow || $row > $this->endRow) {
+                        return false;
                     }
+                    return Coordinate::columnIndexFromString($columnAddress) <= $this->maxCol;
                 }
+            };
+            $reader->setReadFilter($chunkFilter);
 
-                $pendTerakhir = $this->normalizeJenjangPendidikan($getVal($r, ['PENDIDIKAN TERAKHIR']));
-                $lastPend     = ! empty($parsedPend) ? end($parsedPend) : null;
+            for ($startRow = 2; $startRow <= $highestRow; $startRow += $chunkSize) {
+                $endRow = min($highestRow, $startRow + $chunkSize - 1);
+                $chunkFilter->setRows($startRow, $chunkSize);
 
-                $karyawanId = DB::table('karyawan')->insertGetId([
-                    'token'                    => bin2hex(random_bytes(32)),
-                    'nip'                      => $finalNip,
-                    'nik_ktp'                  => $nikRaw,
-                    'nama_lengkap'             => $nama,
-                    'jenis_kelamin'            => $jk,
-                    'tempat_lahir'             => $tempatLahir,
-                    'tgl_lahir'                => $tglLahir,
-                    'golongan_darah'           => $golDarah,
-                    'pendidikan_terakhir'      => $lastPend['jenjang'] ?? ($pendTerakhir ?: 'SD'),
-                    'jurusan'                  => $lastPend['jurusan'] ?? null,
-                    'nama_instansi'            => $lastPend['nama_instansi'] ?? null,
-                    'nilai'                    => $lastPend['nilai_ipk'] ?? null,
-                    'no_wa'                    => $noWa !== '' ? $noWa : null,
-                    'email'                    => $email,
-                    'nama_ayah'                => $namaAyah,
-                    'nama_ibu'                 => $namaIbu,
-                    'status_pernikahan'        => $statusNikah,
-                    'disabilitas'              => $disabilitas,
-                    'tipe_karyawan'            => $tipeKaryawan,
-                    'ket_karyawan'             => $ketKaryawan,
-                    'departemen_id'            => $penempatan['departemen_id'],
-                    'unit_organisasi_id'       => $penempatan['unit_organisasi_id'],
-                    'nama_jabatan'             => $penempatan['nama_jabatan'],
-                    'jabatan_borong_id'        => $penempatan['jabatan_borong_id'],
-                    'kota_perwakilan_id'       => $penempatan['kota_perwakilan_id'],
-                    'area_id'                  => $penempatan['area_id'],
-                    'tgl_masuk_kerja'          => $tglMasukParsed,
-                    'tgl_masuk_hari_diketahui' => $tglMasukHariDiketahui,
-                    'bank_id'                  => $bankId,
-                    'no_rekening'              => $noRek !== '' ? $noRek : null,
-                    'bersedia_transfer'        => $bersediaTransfer,
-                    'nama_pemilik_rekening'    => $namaPemilikRek,
-                    'no_bpjs_kesehatan'        => $bpjsKes,
-                    'no_bpjs_ketenagakerjaan'  => $bpjsKet,
-                    'npwp'                     => $npwp,
-                    'no_anggota_koperasi'      => $noKop,
-                    'status_verifikasi'        => 'BELUM_LENGKAP',
-                    'created_at'               => now(),
-                    'updated_at'               => now(),
-                ]);
+                $spreadsheet = $reader->load($filePath);
+                $sheet       = $targetSheetName
+                    ? ($spreadsheet->getSheetByName($targetSheetName) ?: $spreadsheet->getActiveSheet())
+                    : $spreadsheet->getActiveSheet();
 
-                foreach ($parsedPend as $p) {
-                    DB::table('riwayat_pendidikan')->insert([
-                        'karyawan_id'   => $karyawanId,
-                        'jenjang'       => $p['jenjang'],
-                        'nama_instansi' => $p['nama_instansi'],
-                        'jurusan'       => $p['jurusan'],
-                        'nilai_ipk'     => $p['nilai_ipk'],
-                        'created_at'    => now(),
-                        'updated_at'    => now(),
-                    ]);
-                }
-
-                DB::table('alamat')->insert([
-                    ['karyawan_id' => $karyawanId, 'jenis_alamat' => 'KTP', 'alamat_lengkap' => $alamatKtp],
-                    ['karyawan_id' => $karyawanId, 'jenis_alamat' => 'DOMISILI', 'alamat_lengkap' => $alamatDomisili],
-                ]);
-
-                if ($statusNikah === 'KAWIN' && $namaPasangan !== '') {
-                    DB::table('pasangan')->insert([
-                        'karyawan_id'        => $karyawanId,
-                        'nama_pasangan'      => $namaPasangan,
-                        'pekerjaan_pasangan' => $getVal($r, ['PEKERJAAN PASANGAN']) ?: '-',
-                    ]);
-                }
-
-                if ($statusNikah !== 'BELUM_KAWIN') {
-                    $anakKe = 1;
-                    for ($i = 1; $i <= 10; $i++) {
-                        $namaAnak = strtoupper($getVal($r, ["ANAK {$i} - NAMA", "NAMA ANAK {$i}"]));
-                        if ($namaAnak === '') {
+                $getVal = function (int $row, array $aliases) use ($sheet, $headerMap): string {
+                    foreach ($aliases as $alias) {
+                        $key = trim(rtrim(strtoupper($alias), '*'));
+                        if (! isset($headerMap[$key])) {
                             continue;
                         }
-                        $tglAnak  = $this->normalizeExcelDate($getVal($r, ["ANAK {$i} - TGL LAHIR", "TGL LAHIR ANAK {$i}"]));
-                        $pendAnak = $this->normalizePendidikanAnak($getVal($r, ["ANAK {$i} - PENDIDIKAN", "PENDIDIKAN ANAK {$i}"]));
 
-                        DB::table('anak')->insert([
-                            'karyawan_id'     => $karyawanId,
-                            'anak_ke'         => $anakKe++,
-                            'nama_anak'       => $namaAnak,
-                            'tgl_lahir_anak'  => $tglAnak,
-                            'pendidikan_anak' => $pendAnak,
+                        $cell = $sheet->getCell($headerMap[$key] . $row);
+                        $raw  = $cell->getValue();
+
+                        if ($raw === null) {
+                            return '';
+                        }
+
+                        if ($cell->isFormula()) {
+                            $str = (string) $cell->getCalculatedValue();
+                        } elseif (is_float($raw) || is_int($raw)) {
+                            $str = sprintf('%.0f', $raw);
+                        } else {
+                            $str = (string) $raw;
+                        }
+
+                        $str = trim(ltrim($str, "'"));
+                        return ($str === '-') ? '' : $str;
+                    }
+                    return '';
+                };
+
+                for ($r = $startRow; $r <= $endRow; $r++) {
+                    $nikRaw = preg_replace('/[^0-9]/', '', $getVal($r, ['NIK', 'NIK KTP']));
+                    $nama   = strtoupper($getVal($r, ['NAMA LENGKAP']));
+
+                    if ($nikRaw === '' && $nama === '') {
+                        continue;
+                    }
+
+                    if (strlen($nikRaw) !== 16) {
+                        $errors[] = "Baris {$r} ({$nama}): NIK '{$nikRaw}' tidak valid (wajib 16 digit).";
+                        continue;
+                    }
+
+                    $missingFields = [];
+
+                    if ($nama === '') {
+                        $missingFields[] = 'Nama Lengkap';
+                    }
+
+                    $jkRaw = strtoupper(trim($getVal($r, ['JENIS KELAMIN'])));
+                    if (! in_array($jkRaw, ['L', 'P'], true)) {
+                        $missingFields[] = 'Jenis Kelamin (wajib diisi L atau P)';
+                    }
+
+                    $tglLahirParsed = $this->normalizeExcelDate($getVal($r, ['TGL LAHIR', 'TANGGAL LAHIR']));
+                    if (! $tglLahirParsed) {
+                        $missingFields[] = 'Tgl Lahir (wajib format YYYY-MM-DD, tahun 4 digit valid)';
+                    }
+
+                    $alamatKtpCheck = trim($getVal($r, ['ALAMAT KTP']));
+                    if ($alamatKtpCheck === '') {
+                        $missingFields[] = 'Alamat KTP';
+                    }
+
+                    $namaAyahCheck = trim($getVal($r, ['NAMA AYAH']));
+                    if ($namaAyahCheck === '') {
+                        $missingFields[] = 'Nama Ayah';
+                    }
+
+                    $namaIbuCheck = trim($getVal($r, ['NAMA IBU']));
+                    if ($namaIbuCheck === '') {
+                        $missingFields[] = 'Nama Ibu';
+                    }
+
+                    $tglMasukRaw = $getVal($r, [
+                        'TANGGAL MASUK PT SUKUN (YYYY-MM-DD)',
+                        'MASUK PT SUKUN',
+                        'TGL MASUK',
+                        'TANGGAL MASUK',
+                    ]);
+                    $tglMasukHariDiketahui = true;
+                    $tglMasukParsed        = null;
+
+                    if (preg_match('/^\d{4}$/', $tglMasukRaw)) {
+                        $yr = (int) $tglMasukRaw;
+                        if ($yr >= 1970 && $yr <= (int) date('Y')) {
+                            $tglMasukParsed        = $tglMasukRaw . '-01-01';
+                            $tglMasukHariDiketahui = false;
+                        }
+                    } elseif (preg_match('/^(\d{4})-(\d{2})$/', $tglMasukRaw, $ym)) {
+                        $yr = (int) $ym[1];
+                        $mo = (int) $ym[2];
+                        if ($yr >= 1970 && $yr <= (int) date('Y') && $mo >= 1 && $mo <= 12) {
+                            $tglMasukParsed        = $tglMasukRaw . '-01';
+                            $tglMasukHariDiketahui = false;
+                        }
+                    } else {
+                        $tglMasukParsed = $this->normalizeExcelDate($tglMasukRaw);
+                    }
+
+                    if (! $tglMasukParsed) {
+                        $missingFields[] = 'Tanggal Masuk PT Sukun (YYYY-MM-DD)';
+                    }
+
+                    $tipeKaryawan = strtoupper(trim($getVal($r, ['JENIS KARYAWAN'])));
+                    if (! in_array($tipeKaryawan, ['BULANAN', 'HARIAN', 'BORONG', 'DISTRIBUSI'], true)) {
+                        $missingFields[] = 'Jenis Karyawan (wajib diisi BULANAN / HARIAN / BORONG / DISTRIBUSI)';
+                    }
+
+                    $ketKaryawan = str_replace(' ', '_', strtoupper(trim($getVal($r, ['STATUS KARYAWAN']))));
+                    if (! in_array($ketKaryawan, ['TETAP', 'HARIAN_LEPAS', 'KONTRAK'], true)) {
+                        $missingFields[] = 'Status Karyawan (wajib diisi TETAP / HARIAN_LEPAS / KONTRAK)';
+                    }
+
+                    $unitNama = strtoupper($getVal($r, ['UNIT', 'DEPARTEMEN / UNIT']));
+                    $divNama  = strtoupper($getVal($r, ['DIVISI']));
+                    $unitId   = $unitMap[$unitNama]['id'] ?? null;
+                    $deptId   = $unitMap[$unitNama]['departemen_id'] ?? ($deptMap[$divNama] ?? null);
+
+                    if ($tipeKaryawan !== 'DISTRIBUSI' && ! $unitId) {
+                        $missingFields[] = $unitNama === ''
+                            ? 'Unit (wajib diisi untuk karyawan non-DISTRIBUSI)'
+                            : "Unit '{$unitNama}' tidak ditemukan di sheet MASTER";
+                    }
+
+                    $statusNikah = str_replace(' ', '_', strtoupper(trim($getVal($r, ['PERNIKAHAN', 'STATUS PERNIKAHAN']))));
+                    if (! in_array($statusNikah, ['BELUM_KAWIN', 'KAWIN', 'CERAI_HIDUP', 'CERAI_MATI'], true)) {
+                        $missingFields[] = 'Pernikahan (wajib diisi BELUM_KAWIN / KAWIN / CERAI_HIDUP / CERAI_MATI)';
+                    }
+
+                    $namaPasangan = strtoupper($getVal($r, ['PASANGAN', 'NAMA PASANGAN']));
+                    if ($statusNikah === 'KAWIN' && $namaPasangan === '') {
+                        $missingFields[] = 'Pasangan (wajib diisi jika status KAWIN)';
+                    }
+
+                    if ($statusNikah !== '' && $statusNikah !== 'BELUM_KAWIN') {
+                        $jmlAnakExcel = (int) preg_replace('/[^0-9]/', '', $getVal($r, ['JML ANAK', 'JUMLAH ANAK']));
+                        for ($ai = 1; $ai <= max($jmlAnakExcel, 10); $ai++) {
+                            $namaAnakCheck = trim($getVal($r, ["ANAK {$ai} - NAMA", "NAMA ANAK {$ai}"]));
+                            $tglAnakCheck  = trim($getVal($r, ["ANAK {$ai} - TGL LAHIR", "TGL LAHIR ANAK {$ai}"]));
+                            $pendAnakCheck = trim($getVal($r, ["ANAK {$ai} - PENDIDIKAN", "PENDIDIKAN ANAK {$ai}"]));
+
+                            if (($ai <= $jmlAnakExcel || $tglAnakCheck !== '' || $pendAnakCheck !== '') && $namaAnakCheck === '') {
+                                $missingFields[] = "Anak {$ai} - Nama (wajib diisi)";
+                            }
+                        }
+                    }
+
+                    $bersediaTransfer = strtoupper(trim($getVal($r, ['BERSEDIA TRANSFER'])));
+                    if (! in_array($bersediaTransfer, ['YA', 'TIDAK'], true)) {
+                        $missingFields[] = 'Bersedia Transfer (wajib diisi YA / TIDAK)';
+                    }
+
+                    $noRekCheck = $this->normalizeRekening($getVal($r, ['NO REKENING']));
+                    if ($noRekCheck !== '' && preg_match('/^(?:[0-9]{9,10}|[0-9]{15})$/', $noRekCheck) !== 1) {
+                        $missingFields[] = 'No Rekening (jika diisi harus 9-10 digit untuk BNI atau 15 digit untuk BRI)';
+                    }
+
+                    $bpjsKesCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KES', 'NO BPJS KESEHATAN'])));
+                    $bpjsKetCheck = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $getVal($r, ['BPJS KET', 'NO BPJS KETENAGAKERJAAN'])));
+
+                    for ($pi = 1; $pi <= 10; $pi++) {
+                        $jenjangCheck  = $this->normalizeJenjangPendidikan($getVal($r, ["PENDIDIKAN {$pi} - JENJANG"]));
+                        $instansiCheck = trim($getVal($r, ["PENDIDIKAN {$pi} - INSTANSI"]));
+
+                        if ($jenjangCheck === 'TIDAK SEKOLAH') {
+                            continue;
+                        }
+
+                        if ($jenjangCheck !== '' && $instansiCheck === '') {
+                            $missingFields[] = "Pendidikan {$pi} - Instansi (wajib diisi jika Jenjang {$jenjangCheck} diisi)";
+                        } elseif ($jenjangCheck === '' && $instansiCheck !== '') {
+                            $missingFields[] = "Pendidikan {$pi} - Jenjang (wajib diisi jika Instansi diisi)";
+                        }
+                    }
+
+                    if (! empty($missingFields)) {
+                        $errors[] = "Baris {$r} ({$nama}): data wajib belum valid/lengkap - " . implode(', ', $missingFields) . '.';
+                        continue;
+                    }
+
+                    if (isset($existingKaryawanByNik[$nikRaw])) {
+                        $sudahAda     = $existingKaryawanByNik[$nikRaw];
+                        $duplicates[] = [
+                            'baris' => $r,
+                            'nik'   => $nikRaw,
+                            'nama'  => $nama ?: $sudahAda['nama_lengkap'],
+                        ];
+                        continue;
+                    }
+
+                    DB::beginTransaction();
+                    try {
+                        $nipInput = $getVal($r, ['NIP']);
+                        if ($nipInput !== '' && isset($existingNips[$nipInput])) {
+                            $nipInput = '';
+                        }
+                        $finalNip = $this->resolveNip($nipInput);
+
+                        $jk          = $jkRaw;
+                        $tempatLahir = strtoupper($getVal($r, ['TEMPAT LAHIR'])) ?: null;
+                        $tglLahir    = $tglLahirParsed;
+                        $golDarah    = strtoupper($getVal($r, ['GOLONGAN DARAH'])) ?: '-';
+
+                        $namaAyah       = strtoupper($getVal($r, ['NAMA AYAH']));
+                        $namaIbu        = strtoupper($getVal($r, ['NAMA IBU']));
+                        $alamatKtp      = $alamatKtpCheck;
+                        $alamatDomisili = $getVal($r, ['ALAMAT DOMISILI']) ?: $alamatKtp;
+
+                        $noWaRaw = preg_replace('/[^0-9+]/', '', $getVal($r, ['NO HP/WA', 'NO WA']));
+                        if ($noWaRaw !== '' && str_starts_with($noWaRaw, '8')) {
+                            $noWaRaw = '0' . $noWaRaw;
+                        } elseif ($noWaRaw !== '' && str_starts_with($noWaRaw, '628')) {
+                            $noWaRaw = '0' . substr($noWaRaw, 2);
+                        } elseif ($noWaRaw !== '' && str_starts_with($noWaRaw, '+628')) {
+                            $noWaRaw = '0' . substr($noWaRaw, 3);
+                        }
+                        $noWa = $noWaRaw;
+
+                        $email       = $getVal($r, ['EMAIL']) ?: null;
+                        $disabilitas = $getVal($r, ['DISABILITAS']) ?: null;
+                        $npwp        = $this->normalizeNpwp($getVal($r, ['NPWP']));
+                        $jabatan     = strtoupper($getVal($r, ['JABATAN'])) ?: null;
+
+                        $kotaId = null;
+                        $areaId = null;
+                        if ($tipeKaryawan === 'DISTRIBUSI' && $unitNama !== '') {
+                            $cleanKotaKey = trim(str_replace('PERWAKILAN', '', $unitNama));
+                            if (isset($kotaMap[$cleanKotaKey])) {
+                                $kotaId = $kotaMap[$cleanKotaKey]['id'];
+                                $areaId = $kotaMap[$cleanKotaKey]['area_id'];
+                            }
+                        }
+
+                        $subReq = new Request([
+                            'tipe_karyawan'      => $tipeKaryawan,
+                            'unit_organisasi_id' => $unitId,
+                            'nama_jabatan'       => $jabatan,
+                            'kota_perwakilan_id' => $kotaId,
+                            'area_id'            => $areaId,
                         ]);
+                        $penempatan = $this->resolvePenempatan($subReq, (object) [
+                            'departemen_id'      => $deptId,
+                            'unit_organisasi_id' => $unitId,
+                            'nama_jabatan'       => $jabatan,
+                        ]);
+
+                        $noRek          = $noRekCheck;
+                        $namaBankRaw    = $getVal($r, ['NAMA BANK', 'BANK']);
+                        $bankId         = $resolveBankFast($noRek, $namaBankRaw);
+                        $namaPemilikRek = strtoupper($getVal($r, ['ATAS NAMA REKENING', 'NAMA PEMILIK REKENING'])) ?: $nama;
+
+                        $bpjsKes = $bpjsKesCheck !== '' ? $bpjsKesCheck : null;
+                        $bpjsKet = $bpjsKetCheck !== '' ? $bpjsKetCheck : null;
+                        $noKop   = trim($getVal($r, ['NO KOPERASI KKSG', 'NO ANGGOTA KOPERASI'])) ?: null;
+
+                        $parsedPend = [];
+                        for ($i = 1; $i <= 10; $i++) {
+                            $jenjangRaw = $getVal($r, ["PENDIDIKAN {$i} - JENJANG"]);
+                            $jenjang    = $this->normalizeJenjangPendidikan($jenjangRaw);
+                            $instansi   = strtoupper($getVal($r, ["PENDIDIKAN {$i} - INSTANSI"]));
+                            $jurusan    = strtoupper($getVal($r, ["PENDIDIKAN {$i} - JURUSAN"])) ?: null;
+                            $nilai      = $getVal($r, ["PENDIDIKAN {$i} - NILAI"]) ?: null;
+
+                            if ($jenjang !== '' && $jenjang !== 'TIDAK SEKOLAH' && $instansi !== '') {
+                                $parsedPend[] = [
+                                    'jenjang'       => $jenjang,
+                                    'nama_instansi' => $instansi,
+                                    'jurusan'       => $jurusan,
+                                    'nilai_ipk'     => $nilai,
+                                ];
+                            }
+                        }
+
+                        $pendTerakhir     = $this->normalizeJenjangPendidikan($getVal($r, ['PENDIDIKAN TERAKHIR']));
+                        $lastPend         = ! empty($parsedPend) ? end($parsedPend) : null;
+                        $resolvedDeptName = $deptIdToName[(int) ($penempatan['departemen_id'] ?? 0)] ?? '';
+                        $statusVerifikasi = $this->computeStatusVerifikasi($noWa, $alamatDomisili, $resolvedDeptName, $tempatLahir);
+                        $nowTimestamp     = now();
+
+                        $karyawanId = DB::table('karyawan')->insertGetId([
+                            'token'                    => bin2hex(random_bytes(32)),
+                            'nip'                      => $finalNip,
+                            'nik_ktp'                  => $nikRaw,
+                            'nama_lengkap'             => $nama,
+                            'jenis_kelamin'            => $jk,
+                            'tempat_lahir'             => $tempatLahir,
+                            'tgl_lahir'                => $tglLahir,
+                            'golongan_darah'           => $golDarah,
+                            'pendidikan_terakhir'      => $lastPend['jenjang'] ?? ($pendTerakhir ?: 'TIDAK SEKOLAH'),
+                            'jurusan'                  => $lastPend['jurusan'] ?? null,
+                            'nama_instansi'            => $lastPend['nama_instansi'] ?? null,
+                            'nilai'                    => $lastPend['nilai_ipk'] ?? null,
+                            'no_wa'                    => $noWa !== '' ? $noWa : null,
+                            'email'                    => $email,
+                            'nama_ayah'                => $namaAyah,
+                            'nama_ibu'                 => $namaIbu,
+                            'status_pernikahan'        => $statusNikah,
+                            'disabilitas'              => $disabilitas,
+                            'tipe_karyawan'            => $tipeKaryawan,
+                            'ket_karyawan'             => $ketKaryawan,
+                            'departemen_id'            => $penempatan['departemen_id'],
+                            'unit_organisasi_id'       => $penempatan['unit_organisasi_id'],
+                            'nama_jabatan'             => $penempatan['nama_jabatan'],
+                            'jabatan_borong_id'        => $penempatan['jabatan_borong_id'],
+                            'kota_perwakilan_id'       => $penempatan['kota_perwakilan_id'],
+                            'area_id'                  => $penempatan['area_id'],
+                            'tgl_masuk_kerja'          => $tglMasukParsed,
+                            'tgl_masuk_hari_diketahui' => $tglMasukHariDiketahui,
+                            'bank_id'                  => $bankId,
+                            'no_rekening'              => $noRek !== '' ? $noRek : null,
+                            'bersedia_transfer'        => $bersediaTransfer,
+                            'nama_pemilik_rekening'    => $namaPemilikRek,
+                            'no_bpjs_kesehatan'        => $bpjsKes,
+                            'no_bpjs_ketenagakerjaan'  => $bpjsKet,
+                            'npwp'                     => $npwp,
+                            'no_anggota_koperasi'      => $noKop,
+                            'status_verifikasi'        => $statusVerifikasi,
+                            'created_at'               => $nowTimestamp,
+                            'updated_at'               => $nowTimestamp,
+                        ]);
+
+                        if (! empty($parsedPend)) {
+                            $pendRows = [];
+                            foreach ($parsedPend as $p) {
+                                $pendRows[] = [
+                                    'karyawan_id'   => $karyawanId,
+                                    'jenjang'       => $p['jenjang'],
+                                    'nama_instansi' => $p['nama_instansi'],
+                                    'jurusan'       => $p['jurusan'],
+                                    'nilai_ipk'     => $p['nilai_ipk'],
+                                    'created_at'    => $nowTimestamp,
+                                    'updated_at'    => $nowTimestamp,
+                                ];
+                            }
+                            DB::table('riwayat_pendidikan')->insert($pendRows);
+                        }
+
+                        DB::table('alamat')->insert([
+                            ['karyawan_id' => $karyawanId, 'jenis_alamat' => 'KTP', 'alamat_lengkap' => $alamatKtp],
+                            ['karyawan_id' => $karyawanId, 'jenis_alamat' => 'DOMISILI', 'alamat_lengkap' => $alamatDomisili],
+                        ]);
+
+                        if ($statusNikah === 'KAWIN' && $namaPasangan !== '') {
+                            DB::table('pasangan')->insert([
+                                'karyawan_id'        => $karyawanId,
+                                'nama_pasangan'      => $namaPasangan,
+                                'pekerjaan_pasangan' => $getVal($r, ['PEKERJAAN PASANGAN']) ?: '-',
+                            ]);
+                        }
+
+                        if ($statusNikah !== 'BELUM_KAWIN') {
+                            $anakRows = [];
+                            $anakKe   = 1;
+                            for ($i = 1; $i <= 10; $i++) {
+                                $namaAnak = strtoupper($getVal($r, ["ANAK {$i} - NAMA", "NAMA ANAK {$i}"]));
+                                if ($namaAnak === '') {
+                                    continue;
+                                }
+                                $anakRows[] = [
+                                    'karyawan_id'     => $karyawanId,
+                                    'anak_ke'         => $anakKe++,
+                                    'nama_anak'       => $namaAnak,
+                                    'tgl_lahir_anak'  => $this->normalizeExcelDate($getVal($r, ["ANAK {$i} - TGL LAHIR", "TGL LAHIR ANAK {$i}"])),
+                                    'pendidikan_anak' => $this->normalizePendidikanAnak($getVal($r, ["ANAK {$i} - PENDIDIKAN", "PENDIDIKAN ANAK {$i}"])),
+                                ];
+                            }
+                            if (! empty($anakRows)) {
+                                DB::table('anak')->insert($anakRows);
+                            }
+                        }
+
+                        $karirRows = [];
+                        for ($i = 1; $i <= 10; $i++) {
+                            $bagian = strtoupper($getVal($r, ["KARIR SUKUN {$i} - BAGIAN"]));
+                            if ($bagian === '') {
+                                continue;
+                            }
+                            $karirRows[] = [
+                                'karyawan_id' => $karyawanId,
+                                'unit_bagian' => $bagian,
+                                'jabatan'     => strtoupper($getVal($r, ["KARIR SUKUN {$i} - JABATAN"])) ?: '-',
+                                'tgl_mulai'   => $this->parseTahunOrDate($getVal($r, ["KARIR SUKUN {$i} - TAHUN MULAI"]), false),
+                                'tgl_selesai' => $this->parseTahunOrDate($getVal($r, ["KARIR SUKUN {$i} - TAHUN SELESAI"]), true),
+                                'created_at'  => $nowTimestamp,
+                                'updated_at'  => $nowTimestamp,
+                            ];
+                        }
+                        if (! empty($karirRows)) {
+                            DB::table('riwayat_pekerjaan_sukun')->insert($karirRows);
+                        }
+
+                        $pengRows = [];
+                        for ($i = 1; $i <= 10; $i++) {
+                            $perusahaan = strtoupper($getVal($r, [
+                                "PENGALAMAN LUAR {$i} - PERUSAHAAN",
+                                "PENGALAMAN {$i} - PERUSAHAAN",
+                            ]));
+                            if ($perusahaan === '') {
+                                continue;
+                            }
+                            $pengRows[] = [
+                                'karyawan_id'     => $karyawanId,
+                                'nama_perusahaan' => $perusahaan,
+                                'jabatan'         => strtoupper($getVal($r, [
+                                    "PENGALAMAN LUAR {$i} - JABATAN",
+                                    "PENGALAMAN {$i} - JABATAN",
+                                ])) ?: '-',
+                                'tahun_masuk'     => $getVal($r, [
+                                    "PENGALAMAN LUAR {$i} - TAHUN MASUK",
+                                    "PENGALAMAN {$i} - TAHUN MASUK",
+                                ]) ?: null,
+                                'tahun_keluar'    => $getVal($r, [
+                                    "PENGALAMAN LUAR {$i} - TAHUN KELUAR",
+                                    "PENGALAMAN {$i} - TAHUN KELUAR",
+                                ]) ?: null,
+                            ];
+                        }
+                        if (! empty($pengRows)) {
+                            DB::table('pengalaman_kerja_sebelum')->insert($pengRows);
+                        }
+
+                        DB::commit();
+                        $existingKaryawanByNik[$nikRaw] = [
+                            'nama_lengkap' => $nama,
+                            'nip'          => $finalNip,
+                        ];
+                        $existingNips[$finalNip] = true;
+                        $insertedCount++;
+                    } catch (\Throwable $e) {
+                        DB::rollBack();
+                        $errors[] = "Baris {$r} ({$nama}): Gagal disimpan ({$e->getMessage()}).";
                     }
                 }
 
-                for ($i = 1; $i <= 10; $i++) {
-                    $bagian = strtoupper($getVal($r, ["KARIR SUKUN {$i} - BAGIAN"]));
-                    if ($bagian === '') {
-                        continue;
-                    }
-                    $jabatanKarir = strtoupper($getVal($r, ["KARIR SUKUN {$i} - JABATAN"])) ?: '-';
-                    $thnMulai     = $getVal($r, ["KARIR SUKUN {$i} - TAHUN MULAI"]);
-                    $thnSelesai   = $getVal($r, ["KARIR SUKUN {$i} - TAHUN SELESAI"]);
-
-                    DB::table('riwayat_pekerjaan_sukun')->insert([
-                        'karyawan_id' => $karyawanId,
-                        'unit_bagian' => $bagian,
-                        'jabatan'     => $jabatanKarir,
-                        'tgl_mulai'   => $this->parseTahunOrDate($thnMulai, false),
-                        'tgl_selesai' => $this->parseTahunOrDate($thnSelesai, true),
-                        'created_at'  => now(),
-                        'updated_at'  => now(),
-                    ]);
-                }
-
-                for ($i = 1; $i <= 10; $i++) {
-                    $perusahaan = strtoupper($getVal($r, [
-                        "PENGALAMAN LUAR {$i} - PERUSAHAAN",
-                        "PENGALAMAN {$i} - PERUSAHAAN",
-                    ]));
-                    if ($perusahaan === '') {
-                        continue;
-                    }
-                    $jabatanPeng = strtoupper($getVal($r, [
-                        "PENGALAMAN LUAR {$i} - JABATAN",
-                        "PENGALAMAN {$i} - JABATAN",
-                    ])) ?: '-';
-                    $thnMasuk = $getVal($r, [
-                        "PENGALAMAN LUAR {$i} - TAHUN MASUK",
-                        "PENGALAMAN {$i} - TAHUN MASUK",
-                    ]) ?: null;
-                    $thnKeluar = $getVal($r, [
-                        "PENGALAMAN LUAR {$i} - TAHUN KELUAR",
-                        "PENGALAMAN {$i} - TAHUN KELUAR",
-                    ]) ?: null;
-
-                    DB::table('pengalaman_kerja_sebelum')->insert([
-                        'karyawan_id'     => $karyawanId,
-                        'nama_perusahaan' => $perusahaan,
-                        'jabatan'         => $jabatanPeng,
-                        'tahun_masuk'     => $thnMasuk,
-                        'tahun_keluar'    => $thnKeluar,
-                    ]);
-                }
-
-                $this->syncStatusVerifikasi($karyawanId);
-
-                DB::commit();
-                $existingKaryawanByNik[$nikRaw] = [
-                    'nama_lengkap' => $nama,
-                    'nip'          => $finalNip,
-                ];
-                $existingNips[$finalNip] = true;
-                $insertedCount++;
-            } catch (\Throwable $e) {
-                DB::rollBack();
-                $errors[] = "Baris {$r} ({$nama}): Gagal disimpan ({$e->getMessage()}).";
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet, $sheet);
+                gc_collect_cycles();
             }
+
+            unset($reader);
+
+            return back()->with([
+                'import_sukses'     => "Import selesai: {$insertedCount} data karyawan baru berhasil masuk.",
+                'import_duplicates' => $duplicates,
+                'import_errors'     => $errors,
+            ]);
+        } finally {
+            $lock->release();
         }
-
-        $spreadsheet->disconnectWorksheets();
-        unset($spreadsheet, $reader);
-
-        return back()->with([
-            'import_sukses'     => "Import selesai: {$insertedCount} data karyawan baru berhasil masuk.",
-            'import_duplicates' => $duplicates,
-            'import_errors'     => $errors,
-        ]);
     }
 
     private function normalizeExcelDate(string $raw): ?string
@@ -2454,8 +2736,9 @@ class PendataanController extends Controller
     private function exportExcel($query, array $filterMeta = [])
     {
         @set_time_limit(300);
-        @ini_set('memory_limit', '512M');
+        $this->ensureMemoryLimit('512M');
         DB::disableQueryLog();
+        gc_enable();
 
         if (session()->isStarted()) {
             session()->save();
@@ -2468,31 +2751,9 @@ class PendataanController extends Controller
             ]);
         }
 
-        $previousBinder = Cell::getValueBinder();
-        Cell::setValueBinder(new class extends DefaultValueBinder {
-            public function bindValue(Cell $cell, $value = null): bool
-            {
-                if ($value === null) {
-                    $cell->setValueExplicit(null, DataType::TYPE_NULL);
-                    return true;
-                }
-                if (is_int($value) || is_float($value)) {
-                    $cell->setValueExplicit($value, DataType::TYPE_NUMERIC);
-                    return true;
-                }
-                if (is_bool($value)) {
-                    $cell->setValueExplicit($value, DataType::TYPE_BOOL);
-                    return true;
-                }
-                $str = (string) $value;
-                if ($str !== '' && $str[0] === '=' && strlen($str) > 1) {
-                    $cell->setValueExplicit($str, DataType::TYPE_FORMULA);
-                    return true;
-                }
-                $cell->setValueExplicit($str, DataType::TYPE_STRING);
-                return true;
-            }
-        });
+        $spreadsheet = null;
+        $writer      = null;
+        $tempFile    = null;
 
         try {
             $totalRows   = (clone $query)->reorder()->count('karyawan.id');
@@ -2698,8 +2959,31 @@ class PendataanController extends Controller
             $rowData = 2;
             $noData  = 1;
 
+            $writeSparseRow = function (int $targetRow, array $values) use ($wsData): void {
+                foreach ($values as $idx => $val) {
+                    if ($val === null || $val === '') {
+                        continue;
+                    }
+                    $colLetter = Coordinate::stringFromColumnIndex($idx + 1);
+                    $cell      = $wsData->getCell($colLetter . $targetRow);
+
+                    if (is_int($val) || is_float($val)) {
+                        $cell->setValueExplicit($val, DataType::TYPE_NUMERIC);
+                    } elseif (is_bool($val)) {
+                        $cell->setValueExplicit($val, DataType::TYPE_BOOL);
+                    } else {
+                        $str = (string) $val;
+                        if ($str[0] === '=' && strlen($str) > 1) {
+                            $cell->setValueExplicit($str, DataType::TYPE_FORMULA);
+                        } else {
+                            $cell->setValueExplicit($str, DataType::TYPE_STRING);
+                        }
+                    }
+                }
+            };
+
             (clone $query)->reorder()->chunkById(500, function ($chunk) use (
-                $wsData,
+                $writeSparseRow,
                 &$rowData,
                 &$noData,
                 $lastMasterRow,
@@ -2749,9 +3033,6 @@ class PendataanController extends Controller
                     ->orderBy('id')
                     ->get()
                     ->groupBy('karyawan_id');
-
-                $chunkStartRow = $rowData;
-                $batchRows     = [];
 
                 foreach ($chunk as $emp) {
                     $alList      = $alamatMap->get($emp->id) ?? collect();
@@ -2808,37 +3089,50 @@ class PendataanController extends Controller
 
                     for ($i = 0; $i < $maxPend; $i++) {
                         $p = $pendList->get($i);
-                        array_push($rowValues, $p->jenjang ?? null, $p->nama_instansi ?? null, $p->jurusan ?? null, $p->nilai_ipk ?? null);
+                        if ($p) {
+                            array_push($rowValues, $p->jenjang ?? null, $p->nama_instansi ?? null, $p->jurusan ?? null, $p->nilai_ipk ?? null);
+                        } else {
+                            array_push($rowValues, null, null, null, null);
+                        }
                     }
                     for ($i = 0; $i < $maxAnak; $i++) {
                         $a = $anakList->get($i);
-                        array_push($rowValues, $a->nama_anak ?? null, $a->tgl_lahir_anak ?? null, $a->pendidikan_anak ?? null);
+                        if ($a) {
+                            array_push($rowValues, $a->nama_anak ?? null, $a->tgl_lahir_anak ?? null, $a->pendidikan_anak ?? null);
+                        } else {
+                            array_push($rowValues, null, null, null);
+                        }
                     }
                     for ($i = 0; $i < $maxKarir; $i++) {
-                        $s       = $sukunList->get($i);
-                        $mulai   = ($s && $s->tgl_mulai) ? substr($s->tgl_mulai, 0, 4) : null;
-                        $selesai = ($s && $s->tgl_selesai) ? substr($s->tgl_selesai, 0, 4) : ($s ? 'Sekarang' : null);
-                        array_push($rowValues, $s->unit_bagian ?? null, $s->jabatan ?? null, $mulai, $selesai);
+                        $s = $sukunList->get($i);
+                        if ($s) {
+                            $mulai   = $s->tgl_mulai ? substr($s->tgl_mulai, 0, 4) : null;
+                            $selesai = $s->tgl_selesai ? substr($s->tgl_selesai, 0, 4) : 'Sekarang';
+                            array_push($rowValues, $s->unit_bagian ?? null, $s->jabatan ?? null, $mulai, $selesai);
+                        } else {
+                            array_push($rowValues, null, null, null, null);
+                        }
                     }
                     for ($i = 0; $i < $maxPeng; $i++) {
                         $pg = $pengList->get($i);
-                        array_push($rowValues, $pg->nama_perusahaan ?? null, $pg->jabatan ?? null, $pg->tahun_masuk ?? null, $pg->tahun_keluar ?? null);
+                        if ($pg) {
+                            array_push($rowValues, $pg->nama_perusahaan ?? null, $pg->jabatan ?? null, $pg->tahun_masuk ?? null, $pg->tahun_keluar ?? null);
+                        } else {
+                            array_push($rowValues, null, null, null, null);
+                        }
                     }
 
-                    $batchRows[] = $rowValues;
+                    $writeSparseRow($rowData, $rowValues);
                     $rowData++;
                 }
 
-                if (! empty($batchRows)) {
-                    $wsData->fromArray($batchRows, null, "A{$chunkStartRow}", true);
-                }
-
-                unset($chunk, $ids, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap, $batchRows);
+                unset($chunk, $ids, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap);
+                gc_collect_cycles();
             }, 'karyawan.id', 'id');
 
             $maxExportDropdownRow = max(500, $rowData + 100);
             foreach (['C', 'D', 'M', 'U', 'W', 'X', 'Y', 'AK'] as $textCol) {
-                $wsData->getStyle("{$textCol}2:{$textCol}{$maxExportDropdownRow}")
+                $wsData->getStyle($textCol)
                     ->getNumberFormat()
                     ->setFormatCode(NumberFormat::FORMAT_TEXT);
             }
@@ -2867,9 +3161,9 @@ class PendataanController extends Controller
             $wsCat->getRowDimension(1)->setRowHeight(15.5);
 
             $notes = [
-                ['1', "Jika menambah data baru secara manual di sheet DATA, salin (drag) rumus pada kolom 'Divisi' (AC) & 'Departemen / Unit' (AD) dari baris terakhir agar pemetaan unit otomatis."],
+                ['1', "Jika menambah data baru secara manual di sheet DATA, salin (drag) rumus pada kolom 'Divisi*' (AC) & 'Departemen / Unit*' (AD) dari baris terakhir agar pemetaan unit otomatis."],
                 ['2', 'Sheet DATA pada file ini dapat langsung digunakan sebagai template Import Excel. Setiap data pendidikan, anak, karir Sukun, dan pengalaman luar sudah dipisah per kolom dan dilengkapi dropdown.'],
-                ['3', 'Khusus jenjang pendidikan dari SD sampai SMA/SMK, kolom Jurusan dan Nilai/IPK tidak wajib diisi (boleh dikosongkan atau diisi "-").'],
+                ['3', 'Jika karyawan tidak sekolah, pilih TIDAK SEKOLAH pada Pendidikan Terakhir* dan kosongkan kolom Pendidikan 1 (atau isi "-"). Jika diisi, yang wajib hanya Jenjang* dan Instansi* (Jurusan dan Nilai opsional).'],
                 ['4', 'Data dengan NIK yang sudah terdaftar akan otomatis dilewati dengan notifikasi duplikat saat proses Import Excel.'],
                 ['5', "Isi kolom 'Target Karyawan' di sheet MASTER (khususnya PRODUKSI) agar kolom Belum Isi & % Isi terisi."],
                 ['6', 'File ini di-export langsung dari sistem pendataan karyawan PT. Sukun Wartono Indonesia.'],
@@ -2976,24 +3270,34 @@ class PendataanController extends Controller
             if (! is_dir($tempDir)) {
                 mkdir($tempDir, 0755, true);
             }
+            $this->cleanupOldTempFiles($tempDir);
 
             $fileName = 'REKAP_PENDATAAN_PT_SWI_' . date('Ymd_His') . '.xlsx';
-            $writer   = new Xlsx($spreadsheet);
+            $tempFile = tempnam($tempDir, 'swi_excel_');
+
+            $writer = new Xlsx($spreadsheet);
             $writer->setPreCalculateFormulas(false);
             $writer->setUseDiskCaching(true, $tempDir);
-
-            $tempFile = tempnam($tempDir, 'swi_excel_');
-            gc_collect_cycles();
             $writer->save($tempFile);
 
             $spreadsheet->disconnectWorksheets();
             unset($spreadsheet, $writer);
+            gc_collect_cycles();
 
             return response()->download($tempFile, $fileName, [
                 'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             ])->deleteFileAfterSend(true);
+        } catch (\Throwable $e) {
+            if ($spreadsheet) {
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet, $writer);
+            }
+            if ($tempFile && is_file($tempFile)) {
+                @unlink($tempFile);
+            }
+            gc_collect_cycles();
+            throw $e;
         } finally {
-            Cell::setValueBinder($previousBinder);
             $lock->release();
         }
     }
@@ -3001,6 +3305,7 @@ class PendataanController extends Controller
     private function exportCsv($query)
     {
         @set_time_limit(300);
+        gc_enable();
 
         if (session()->isStarted()) {
             session()->save();
@@ -3120,6 +3425,7 @@ class PendataanController extends Controller
                 }
 
                 unset($chunk, $ids, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap);
+                gc_collect_cycles();
                 fflush($handle);
             }, 'karyawan.id', 'id');
 
@@ -3132,8 +3438,13 @@ class PendataanController extends Controller
         return $response;
     }
 
-    private function buildDashboardQuery(Request $request, ?array $allowedUnitIds = null, array $extraKaryawanIds = []): array
-    {
+    private function buildDashboardQuery(
+        Request $request,
+        ?array $allowedUnitIds = null,
+        array $extraKaryawanIds = [],
+        array $extraKotaIds = [],
+        array $extraAreaIds = []
+    ): array {
         $statusExpr = $this->statusVerifikasiSqlExpression();
 
         $query = DB::table('karyawan')
@@ -3165,15 +3476,21 @@ class PendataanController extends Controller
         ];
 
         if ($allowedUnitIds !== null) {
-            if (empty($allowedUnitIds) && empty($extraKaryawanIds)) {
+            if (empty($allowedUnitIds) && empty($extraKaryawanIds) && empty($extraKotaIds) && empty($extraAreaIds)) {
                 $query->whereRaw('1 = 0');
             } else {
-                $query->where(function ($q) use ($allowedUnitIds, $extraKaryawanIds) {
+                $query->where(function ($q) use ($allowedUnitIds, $extraKaryawanIds, $extraKotaIds, $extraAreaIds) {
                     if (! empty($allowedUnitIds)) {
                         $q->whereIn('karyawan.unit_organisasi_id', $allowedUnitIds);
                     }
                     if (! empty($extraKaryawanIds)) {
                         $q->orWhereIn('karyawan.id', $extraKaryawanIds);
+                    }
+                    if (! empty($extraKotaIds)) {
+                        $q->orWhereIn('karyawan.kota_perwakilan_id', $extraKotaIds);
+                    }
+                    if (! empty($extraAreaIds)) {
+                        $q->orWhereIn('karyawan.area_id', $extraAreaIds);
                     }
                 });
             }
@@ -3280,6 +3597,9 @@ class PendataanController extends Controller
         $unitIds    = DB::table('atasan_unit')->where('pengguna_id', $penggunaId)->pluck('unit_organisasi_id')->toArray();
 
         $extraKaryawanIds = [];
+        $extraKotaIds     = [];
+        $extraAreaIds     = [];
+
         $username = strtolower(trim((string) (
             session('pengguna_username')
             ?? session('username')
@@ -3302,7 +3622,56 @@ class PendataanController extends Controller
             ];
         }
 
-        [$query, $filterMeta] = $this->buildDashboardQuery($request, $unitIds, $extraKaryawanIds);
+        $isKarisidenanPati = ($username === 'kepala_perwakilan_karisidenan_pati');
+        if (! $isKarisidenanPati && ! empty($unitIds)) {
+            $isKarisidenanPati = DB::table('unit_organisasi')
+                ->whereIn('id', $unitIds)
+                ->where(function ($q) {
+                    $q->where('nama_unit', 'like', '%KARISIDENAN PATI%')
+                        ->orWhere('nama_unit', 'like', '%KARESIDENAN PATI%');
+                })
+                ->exists();
+        }
+
+        if ($isKarisidenanPati) {
+            $karisidenanKeywords = ['PATI', 'KUDUS', 'JEPARA', 'REMBANG', 'BLORA'];
+
+            $patiUnitIds = DB::table('unit_organisasi')
+                ->where(function ($q) use ($karisidenanKeywords) {
+                    $q->where('nama_unit', 'like', '%KARISIDENAN PATI%')
+                        ->orWhere('nama_unit', 'like', '%KARESIDENAN PATI%');
+                    foreach ($karisidenanKeywords as $kw) {
+                        $q->orWhere('nama_unit', 'like', '%' . $kw . '%');
+                    }
+                })
+                ->where('nama_unit', 'not like', '%PUSAT%')
+                ->pluck('id')
+                ->toArray();
+
+            $unitIds = array_values(array_unique(array_merge($unitIds, $patiUnitIds)));
+
+            $extraKotaIds = DB::table('kota_perwakilan')
+                ->where(function ($q) use ($karisidenanKeywords) {
+                    foreach ($karisidenanKeywords as $kw) {
+                        $q->orWhere('nama_kota', 'like', '%' . $kw . '%');
+                    }
+                })
+                ->pluck('id')
+                ->toArray();
+
+            $extraAreaIds = DB::table('area')
+                ->where(function ($q) use ($karisidenanKeywords) {
+                    $q->where('nama_area', 'like', '%KARISIDENAN PATI%')
+                        ->orWhere('nama_area', 'like', '%KARESIDENAN PATI%');
+                    foreach ($karisidenanKeywords as $kw) {
+                        $q->orWhere('nama_area', 'like', '%' . $kw . '%');
+                    }
+                })
+                ->pluck('id')
+                ->toArray();
+        }
+
+        [$query, $filterMeta] = $this->buildDashboardQuery($request, $unitIds, $extraKaryawanIds, $extraKotaIds, $extraAreaIds);
 
         if ($request->input('export') === 'excel') {
             return $this->exportExcel($query, $filterMeta);
