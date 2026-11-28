@@ -3,20 +3,17 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use PhpOffice\PhpSpreadsheet\Cell\Cell;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Cell\DataValidation;
-use PhpOffice\PhpSpreadsheet\Chart\Chart;
-use PhpOffice\PhpSpreadsheet\Chart\DataSeries;
-use PhpOffice\PhpSpreadsheet\Chart\DataSeriesValues;
-use PhpOffice\PhpSpreadsheet\Chart\Legend;
-use PhpOffice\PhpSpreadsheet\Chart\PlotArea;
-use PhpOffice\PhpSpreadsheet\Chart\Title;
+use PhpOffice\PhpSpreadsheet\Cell\DefaultValueBinder;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
@@ -537,8 +534,8 @@ class PendataanController extends Controller
             } elseif ($kotaId) {
                 $namaKota = DB::table('kota_perwakilan')->where('id', $kotaId)->value('nama_kota');
                 if ($namaKota) {
-                    $cleanKota       = strtoupper(trim((string) $namaKota));
-                    $compactKota     = str_replace(' ', '', $cleanKota);
+                    $cleanKota   = strtoupper(trim((string) $namaKota));
+                    $compactKota = str_replace(' ', '', $cleanKota);
 
                     $unitId = DB::table('unit_organisasi')
                         ->when($departemenId, fn ($q) => $q->where('departemen_id', $departemenId))
@@ -1748,6 +1745,9 @@ class PendataanController extends Controller
     {
         $this->ensureCanManageKaryawan('Anda tidak memiliki akses untuk mengunduh template import.');
 
+        @ini_set('memory_limit', '256M');
+        DB::disableQueryLog();
+
         $spreadsheet = new Spreadsheet();
         $spreadsheet->getDefaultStyle()->getFont()->setName('Calibri')->setSize(11);
 
@@ -1795,9 +1795,7 @@ class PendataanController extends Controller
         $noM     = 1;
         foreach ($masterUnits as $u) {
             $divName = $allDivisi->get($u->departemen_id)->nama_departemen ?? '-';
-            $wsMaster->setCellValue("A{$rMaster}", $noM++);
-            $wsMaster->setCellValue("B{$rMaster}", $divName);
-            $wsMaster->setCellValue("C{$rMaster}", $u->nama_unit);
+            $wsMaster->fromArray([$noM++, $divName, $u->nama_unit], null, "A{$rMaster}");
             $rMaster++;
         }
         $lastMasterRow = max(2, $rMaster - 1);
@@ -1822,8 +1820,7 @@ class PendataanController extends Controller
         ];
         $rP = 3;
         foreach ($petunjuk as $p) {
-            $wsInfo->setCellValue("A{$rP}", $p[0]);
-            $wsInfo->setCellValue("B{$rP}", $p[1]);
+            $wsInfo->fromArray($p, null, "A{$rP}");
             $wsInfo->getStyle("A{$rP}")->getFont()->setBold(true);
             $wsInfo->getStyle("B{$rP}")->getAlignment()->setWrapText(true);
             $wsInfo->getRowDimension($rP)->setRowHeight(32);
@@ -1847,8 +1844,10 @@ class PendataanController extends Controller
         }
 
         for ($r = 2; $r <= $maxTemplateRow; $r++) {
-            $wsData->setCellValue("AC{$r}", "=IF(\$P{$r}=\"\",\"\",IFERROR(INDEX(MASTER!\$B\$2:\$B\${$lastMasterRow},MATCH(\$P{$r},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"PERLU DICEK\"))");
-            $wsData->setCellValue("AD{$r}", "=IF(\$P{$r}=\"\",\"\",IFERROR(INDEX(MASTER!\$C\$2:\$C\${$lastMasterRow},MATCH(\$P{$r},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\$P{$r}))");
+            $wsData->fromArray([
+                "=IF(\$P{$r}=\"\",\"\",IFERROR(INDEX(MASTER!\$B\$2:\$B\${$lastMasterRow},MATCH(\$P{$r},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"PERLU DICEK\"))",
+                "=IF(\$P{$r}=\"\",\"\",IFERROR(INDEX(MASTER!\$C\$2:\$C\${$lastMasterRow},MATCH(\$P{$r},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\$P{$r}))",
+            ], null, "AC{$r}");
         }
 
         $this->applySheetDataDropdowns($wsData, $lastMasterRow, $maxTemplateRow, $maxPend, $maxAnak, true);
@@ -1870,14 +1869,15 @@ class PendataanController extends Controller
 
         $spreadsheet->setActiveSheetIndex(0);
 
-        $fileName = 'TEMPLATE_IMPORT_KARYAWAN_PT_SWI.xlsx';
-        $writer   = new Xlsx($spreadsheet);
-        $writer->setPreCalculateFormulas(false);
-
         $tempDir = storage_path('app/temp');
         if (! is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
+
+        $fileName = 'TEMPLATE_IMPORT_KARYAWAN_PT_SWI.xlsx';
+        $writer   = new Xlsx($spreadsheet);
+        $writer->setPreCalculateFormulas(false);
+        $writer->setUseDiskCaching(true, $tempDir);
 
         $tempFile = tempnam($tempDir, 'swi_tpl_');
         $writer->save($tempFile);
@@ -1901,16 +1901,32 @@ class PendataanController extends Controller
             'file_excel.mimes'    => 'Format file harus .xlsx atau .xls.',
         ]);
 
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
+        @set_time_limit(300);
+        @ini_set('memory_limit', '512M');
+        DB::disableQueryLog();
 
-        $spreadsheet = IOFactory::load($request->file('file_excel')->getRealPath());
+        $filePath = $request->file('file_excel')->getRealPath();
+        $reader   = IOFactory::createReaderForFile($filePath);
+        $reader->setReadDataOnly(true);
+
+        if (method_exists($reader, 'listWorksheetNames') && method_exists($reader, 'setLoadSheetsOnly')) {
+            $sheetNames = $reader->listWorksheetNames($filePath);
+            if (in_array('DATA', $sheetNames, true)) {
+                $reader->setLoadSheetsOnly(['DATA']);
+            } elseif (! empty($sheetNames)) {
+                $reader->setLoadSheetsOnly([$sheetNames[0]]);
+            }
+        }
+
+        $spreadsheet = $reader->load($filePath);
         $sheet       = $spreadsheet->getSheetByName('DATA') ?: $spreadsheet->getActiveSheet();
 
         $highestRow    = $sheet->getHighestDataRow();
         $highestColIdx = Coordinate::columnIndexFromString($sheet->getHighestDataColumn());
 
         if ($highestRow < 2) {
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
             return back()->with('import_errors', ['Sheet DATA kosong, tidak ada baris data untuk diimport.']);
         }
 
@@ -1970,6 +1986,20 @@ class PendataanController extends Controller
                 'id'      => $k->id,
                 'area_id' => $k->area_id ?? null,
             ];
+        }
+
+        $existingKaryawanByNik = [];
+        $existingNips          = [];
+        foreach (DB::table('karyawan')->select('nik_ktp', 'nama_lengkap', 'nip')->get() as $ek) {
+            if ($ek->nik_ktp !== null && $ek->nik_ktp !== '') {
+                $existingKaryawanByNik[$ek->nik_ktp] = [
+                    'nama_lengkap' => $ek->nama_lengkap,
+                    'nip'          => $ek->nip,
+                ];
+            }
+            if ($ek->nip !== null && $ek->nip !== '') {
+                $existingNips[$ek->nip] = true;
+            }
         }
 
         $insertedCount = 0;
@@ -2125,16 +2155,12 @@ class PendataanController extends Controller
                 continue;
             }
 
-            $sudahAda = DB::table('karyawan')
-                ->where('nik_ktp', $nikRaw)
-                ->select('nama_lengkap', 'nip')
-                ->first();
-
-            if ($sudahAda) {
+            if (isset($existingKaryawanByNik[$nikRaw])) {
+                $sudahAda     = $existingKaryawanByNik[$nikRaw];
                 $duplicates[] = [
                     'baris' => $r,
                     'nik'   => $nikRaw,
-                    'nama'  => $nama ?: $sudahAda->nama_lengkap,
+                    'nama'  => $nama ?: $sudahAda['nama_lengkap'],
                 ];
                 continue;
             }
@@ -2142,7 +2168,7 @@ class PendataanController extends Controller
             DB::beginTransaction();
             try {
                 $nipInput = $getVal($r, ['NIP']);
-                if ($nipInput !== '' && DB::table('karyawan')->where('nip', $nipInput)->exists()) {
+                if ($nipInput !== '' && isset($existingNips[$nipInput])) {
                     $nipInput = '';
                 }
                 $finalNip = $this->resolveNip($nipInput);
@@ -2365,6 +2391,11 @@ class PendataanController extends Controller
                 $this->syncStatusVerifikasi($karyawanId);
 
                 DB::commit();
+                $existingKaryawanByNik[$nikRaw] = [
+                    'nama_lengkap' => $nama,
+                    'nip'          => $finalNip,
+                ];
+                $existingNips[$finalNip] = true;
                 $insertedCount++;
             } catch (\Throwable $e) {
                 DB::rollBack();
@@ -2372,7 +2403,8 @@ class PendataanController extends Controller
             }
         }
 
-        unset($spreadsheet);
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet, $reader);
 
         return back()->with([
             'import_sukses'     => "Import selesai: {$insertedCount} data karyawan baru berhasil masuk.",
@@ -2419,566 +2451,567 @@ class PendataanController extends Controller
         return $parsed;
     }
 
-    private function exportExcel($dataExport, array $filterMeta = [])
+    private function exportExcel($query, array $filterMeta = [])
     {
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
+        @set_time_limit(300);
+        @ini_set('memory_limit', '512M');
+        DB::disableQueryLog();
 
-        $spreadsheet = new Spreadsheet();
-        $spreadsheet->getDefaultStyle()->getFont()->setName('Calibri')->setSize(11);
-
-        $headerStyle = [
-            'font'      => ['bold' => true, 'size' => 11, 'color' => ['rgb' => 'FFFFFF']],
-            'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1F4E78']],
-            'alignment' => [
-                'horizontal' => Alignment::HORIZONTAL_CENTER,
-                'vertical'   => Alignment::VERTICAL_CENTER,
-                'wrapText'   => true,
-            ],
-            'borders'   => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B0B0B0']]],
-        ];
-
-        $cellBorder = [
-            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B0B0B0']]],
-        ];
-
-        $allDivisi    = DB::table('departemen')->orderBy('id')->get();
-        $allUnits     = DB::table('unit_organisasi')->orderBy('nama_unit')->get();
-        $sortedExport = $dataExport->sortBy('id')->values();
-
-        $masterUnits = $allUnits;
-        $divisiList  = $allDivisi;
-
-        if ($filterMeta['allowed_unit_ids'] !== null) {
-            $effectiveUnitIds = collect($filterMeta['allowed_unit_ids'])
-                ->merge($sortedExport->pluck('unit_organisasi_id')->filter())
-                ->unique()
-                ->values()
-                ->toArray();
-
-            $masterUnits = $allUnits->whereIn('id', $effectiveUnitIds)->values();
-            $divisiList  = $allDivisi->whereIn('id', $masterUnits->pluck('departemen_id')->unique())->values();
+        if (session()->isStarted()) {
+            session()->save();
         }
 
-        if (! empty($filterMeta['departemen'])) {
-            $divisiList  = $divisiList->where('nama_departemen', $filterMeta['departemen'])->values();
-            $masterUnits = $masterUnits->whereIn('departemen_id', $divisiList->pluck('id'))->values();
+        $lock = Cache::lock('pendataan_export_excel_lock', 180);
+        if (! $lock->get()) {
+            return back()->withErrors([
+                'export' => 'Proses Export Excel sedang berjalan oleh pengguna lain. Silakan tunggu beberapa detik lalu coba lagi.',
+            ]);
         }
 
-        if (! empty($filterMeta['unit_id'])) {
-            $masterUnits = $masterUnits->where('id', $filterMeta['unit_id'])->values();
-            $divisiList  = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id'))->values();
-        } elseif (! empty($filterMeta['unit_name'])) {
-            $masterUnits = $masterUnits->where('nama_unit', $filterMeta['unit_name'])->values();
-            $divisiList  = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id'))->values();
-        }
-
-        if (! empty($filterMeta['has_filter'])
-            && empty($filterMeta['departemen'])
-            && empty($filterMeta['unit_id'])
-            && empty($filterMeta['unit_name'])) {
-            $filteredUnitIds = $sortedExport->pluck('unit_organisasi_id')->filter()->unique();
-            $masterUnits     = $masterUnits->whereIn('id', $filteredUnitIds)->values();
-            $divisiList      = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id')->unique())->values();
-        }
-
-        $lastMasterRow = max(2, $masterUnits->count() + 1);
-        $lastDataRow   = max(2, $sortedExport->count() + 1);
-
-        $ids = $sortedExport->pluck('id')->toArray();
-
-        $alamatMap = DB::table('alamat')
-            ->whereIn('karyawan_id', $ids)
-            ->select('karyawan_id', 'jenis_alamat', 'alamat_lengkap')
-            ->get()
-            ->groupBy('karyawan_id');
-
-        $pasanganMap = DB::table('pasangan')
-            ->whereIn('karyawan_id', $ids)
-            ->select('karyawan_id', 'nama_pasangan', 'pekerjaan_pasangan')
-            ->get()
-            ->keyBy('karyawan_id');
-
-        $anakMap = DB::table('anak')
-            ->whereIn('karyawan_id', $ids)
-            ->orderBy('anak_ke')
-            ->get()
-            ->groupBy('karyawan_id');
-
-        $pendidikanMap = DB::table('riwayat_pendidikan')
-            ->whereIn('karyawan_id', $ids)
-            ->orderBy('id')
-            ->get()
-            ->groupBy('karyawan_id');
-
-        $sukunMap = DB::table('riwayat_pekerjaan_sukun')
-            ->whereIn('karyawan_id', $ids)
-            ->orderBy('id')
-            ->get()
-            ->groupBy('karyawan_id');
-
-        $pengalamanMap = DB::table('pengalaman_kerja_sebelum')
-            ->whereIn('karyawan_id', $ids)
-            ->orderBy('id')
-            ->get()
-            ->groupBy('karyawan_id');
-
-        $wsDash = $spreadsheet->getActiveSheet();
-        $wsDash->setTitle('DASHBOARD');
-
-        $wsDash->setCellValue('A1', 'DASHBOARD REKAP PENDATAAN KARYAWAN PT SUKUN KUDUS');
-        $wsDash->getStyle('A1')->getFont()->setBold(true)->setSize(14)->getColor()->setRGB('1F4E78');
-        $wsDash->getRowDimension(1)->setRowHeight(18.5);
-
-        $filterDesc = ! empty($filterMeta['labels'])
-            ? '  |  Filter aktif: ' . implode(', ', $filterMeta['labels'])
-            : '';
-        $wsDash->setCellValue('A2', 'Update terakhir: ' . now()->format('d-m-Y') . '  |  Sumber: export Sistem Pendataan HRD (' . $sortedExport->count() . ' respons)' . $filterDesc);
-        $wsDash->getStyle('A2')->getFont()->setSize(10)->getColor()->setRGB('555555');
-
-        $wsDash->setCellValue('A4', 'Ringkasan per Divisi');
-        $wsDash->getStyle('A4')->getFont()->setBold(true)->setSize(12);
-        $wsDash->setCellValue('I4', 'KPI');
-        $wsDash->getStyle('I4')->getFont()->setBold(true)->setSize(12);
-        $wsDash->getRowDimension(4)->setRowHeight(15.5);
-
-        $dashHeaders = ['No', 'Divisi', 'Jml Departemen', 'Sudah Isi', '% dari Total Isi', 'Departemen Terisi', 'Departemen Belum Terisi'];
-        $wsDash->fromArray($dashHeaders, null, 'A6');
-        $wsDash->getStyle('A6:G6')->applyFromArray($headerStyle);
-        $wsDash->getRowDimension(6)->setRowHeight(29);
-
-        $rowDash    = 7;
-        $noDiv      = 1;
-        $divCount   = $divisiList->count();
-        $totDashRow = 7 + $divCount;
-
-        foreach ($divisiList as $div) {
-            $wsDash->setCellValue("A{$rowDash}", $noDiv++);
-            $wsDash->setCellValue("B{$rowDash}", $div->nama_departemen);
-            $wsDash->setCellValue("C{$rowDash}", "=COUNTIF(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash})");
-            $wsDash->setCellValue("D{$rowDash}", "=COUNTIF(DATA!\$AC\$2:\$AC\${$lastDataRow},\$B{$rowDash})");
-            $wsDash->setCellValue("E{$rowDash}", "=IF(\$D\${$totDashRow}=0,0,\$D{$rowDash}/\$D\${$totDashRow})");
-            $wsDash->setCellValue("F{$rowDash}", "=COUNTIFS(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash},MASTER!\$E\$2:\$E\${$lastMasterRow},\">0\")");
-            $wsDash->setCellValue("G{$rowDash}", "=COUNTIFS(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash},MASTER!\$E\$2:\$E\${$lastMasterRow},0)");
-            $rowDash++;
-        }
-
-        $lastDivRow = max(7, $rowDash - 1);
-        $wsDash->setCellValue("B{$totDashRow}", 'TOTAL');
-        if ($divCount > 0) {
-            $wsDash->setCellValue("C{$totDashRow}", "=SUM(C7:C{$lastDivRow})");
-            $wsDash->setCellValue("D{$totDashRow}", "=SUM(D7:D{$lastDivRow})");
-            $wsDash->setCellValue("E{$totDashRow}", "=SUM(E7:E{$lastDivRow})");
-            $wsDash->setCellValue("F{$totDashRow}", "=SUM(F7:F{$lastDivRow})");
-            $wsDash->setCellValue("G{$totDashRow}", "=SUM(G7:G{$lastDivRow})");
-        } else {
-            $wsDash->fromArray([0, 0, 0, 0, 0], null, "C{$totDashRow}");
-        }
-
-        $wsDash->getStyle("E7:E{$totDashRow}")->getNumberFormat()->setFormatCode('0.0%');
-        $wsDash->getStyle("A7:G{$totDashRow}")->applyFromArray($cellBorder);
-        $wsDash->getStyle("B{$totDashRow}:D{$totDashRow}")->getFont()->setBold(true);
-        $wsDash->getStyle("F{$totDashRow}:G{$totDashRow}")->getFont()->setBold(true);
-
-        foreach (['A' => 5, 'B' => 20, 'C' => 16, 'D' => 12, 'E' => 16, 'F' => 18, 'G' => 22, 'H' => 3, 'I' => 28, 'J' => 14] as $col => $w) {
-            $wsDash->getColumnDimension($col)->setWidth($w);
-        }
-
-        $wsMaster = $spreadsheet->createSheet();
-        $wsMaster->setTitle('MASTER');
-        $masterHeaders = ['No', 'Divisi', 'Departemen / Unit Kerja', 'Target Karyawan (isi manual)', 'Sudah Isi', 'Belum Isi', '% Isi', 'Catatan'];
-        $wsMaster->fromArray($masterHeaders, null, 'A1');
-        $wsMaster->getStyle('A1:H1')->applyFromArray($headerStyle);
-        $wsMaster->getRowDimension(1)->setRowHeight(29);
-
-        $rowMaster = 2;
-        $noMaster  = 1;
-        foreach ($divisiList as $div) {
-            $unitsInDiv = $masterUnits->where('departemen_id', $div->id);
-            foreach ($unitsInDiv as $u) {
-                $wsMaster->setCellValue("A{$rowMaster}", $noMaster++);
-                $wsMaster->setCellValue("B{$rowMaster}", $div->nama_departemen);
-                $wsMaster->setCellValue("C{$rowMaster}", $u->nama_unit);
-                $wsMaster->setCellValue("D{$rowMaster}", null);
-                $wsMaster->setCellValue("E{$rowMaster}", "=COUNTIF(DATA!\$P\$2:\$P\${$lastDataRow},\$C{$rowMaster})");
-                $wsMaster->setCellValue("F{$rowMaster}", "=IF(\$D{$rowMaster}=\"\",\"\",\$D{$rowMaster}-\$E{$rowMaster})");
-                $wsMaster->setCellValue("G{$rowMaster}", "=IF(OR(\$D{$rowMaster}=\"\",\$D{$rowMaster}=0),\"\",\$E{$rowMaster}/\$D{$rowMaster})");
-                $rowMaster++;
+        $previousBinder = Cell::getValueBinder();
+        Cell::setValueBinder(new class extends DefaultValueBinder {
+            public function bindValue(Cell $cell, $value = null): bool
+            {
+                if ($value === null) {
+                    $cell->setValueExplicit(null, DataType::TYPE_NULL);
+                    return true;
+                }
+                if (is_int($value) || is_float($value)) {
+                    $cell->setValueExplicit($value, DataType::TYPE_NUMERIC);
+                    return true;
+                }
+                if (is_bool($value)) {
+                    $cell->setValueExplicit($value, DataType::TYPE_BOOL);
+                    return true;
+                }
+                $str = (string) $value;
+                if ($str !== '' && $str[0] === '=' && strlen($str) > 1) {
+                    $cell->setValueExplicit($str, DataType::TYPE_FORMULA);
+                    return true;
+                }
+                $cell->setValueExplicit($str, DataType::TYPE_STRING);
+                return true;
             }
-        }
+        });
 
-        if ($rowMaster > 2) {
-            $endMasterRow = $rowMaster - 1;
-            $wsMaster->getStyle("G2:G{$endMasterRow}")->getNumberFormat()->setFormatCode('0.0%');
-            $wsMaster->getStyle("A2:H{$endMasterRow}")->applyFromArray($cellBorder);
-        }
+        try {
+            $totalRows   = (clone $query)->reorder()->count('karyawan.id');
+            $lastDataRow = max(2, $totalRows + 1);
 
-        foreach (['A' => 6, 'B' => 18, 'C' => 40, 'D' => 18, 'E' => 10, 'F' => 12, 'G' => 8, 'H' => 40] as $col => $w) {
-            $wsMaster->getColumnDimension($col)->setWidth($w);
-        }
+            $spreadsheet = new Spreadsheet();
+            $spreadsheet->getDefaultStyle()->getFont()->setName('Calibri')->setSize(11);
 
-        $kpiItems = [
-            ['Total respons masuk', "=COUNTA(DATA!\$B\$2:\$B\${$lastDataRow})"],
-            ['Total departemen (master)', "=COUNTA(MASTER!\$C\$2:\$C\${$lastMasterRow})"],
-            ['Departemen sudah ada isian', "=COUNTIF(MASTER!\$E\$2:\$E\${$lastMasterRow},\">0\")"],
-            ['Departemen belum ada isian', "=COUNTIF(MASTER!\$E\$2:\$E\${$lastMasterRow},0)"],
-            ['% departemen terisi', "=IF(J6=0,0,J7/J6)"],
-        ];
-        $rKpi = 5;
-        foreach ($kpiItems as $kpi) {
-            $wsDash->setCellValue("I{$rKpi}", $kpi[0]);
-            $wsDash->setCellValue("J{$rKpi}", $kpi[1]);
-            $rKpi++;
-        }
-        $wsDash->getStyle('I5:J9')->applyFromArray($cellBorder);
-        $wsDash->getStyle('J5:J9')->getFont()->setBold(true);
-        $wsDash->getStyle('J9')->getNumberFormat()->setFormatCode('0.0%');
+            $headerStyle = [
+                'font'      => ['bold' => true, 'size' => 11, 'color' => ['rgb' => 'FFFFFF']],
+                'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1F4E78']],
+                'alignment' => [
+                    'horizontal' => Alignment::HORIZONTAL_CENTER,
+                    'vertical'   => Alignment::VERTICAL_CENTER,
+                    'wrapText'   => true,
+                ],
+                'borders'   => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B0B0B0']]],
+            ];
 
-        if ($divCount > 0) {
-            $chartStartRow = $totDashRow + 3;
-            $chartEndRow   = $chartStartRow + 15;
+            $cellBorder = [
+                'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B0B0B0']]],
+            ];
 
-            $barLabels     = [new DataSeriesValues(DataSeriesValues::DATASERIES_TYPE_STRING, 'DASHBOARD!$D$6', null, 1)];
-            $barCategories = [new DataSeriesValues(DataSeriesValues::DATASERIES_TYPE_STRING, 'DASHBOARD!$B$7:$B$' . $lastDivRow, null, $divCount)];
-            $barValues     = [new DataSeriesValues(DataSeriesValues::DATASERIES_TYPE_NUMBER, 'DASHBOARD!$D$7:$D$' . $lastDivRow, null, $divCount)];
+            $allDivisi   = DB::table('departemen')->orderBy('id')->get();
+            $allUnits    = DB::table('unit_organisasi')->orderBy('nama_unit')->get();
+            $masterUnits = $allUnits;
+            $divisiList  = $allDivisi;
 
-            $barSeries = new DataSeries(DataSeries::TYPE_BARCHART, DataSeries::GROUPING_CLUSTERED, range(0, count($barValues) - 1), $barLabels, $barCategories, $barValues);
-            $barSeries->setPlotDirection(DataSeries::DIRECTION_COL);
+            if ($filterMeta['allowed_unit_ids'] !== null) {
+                $usedUnitIds = (clone $query)->reorder()
+                    ->whereNotNull('karyawan.unit_organisasi_id')
+                    ->distinct()
+                    ->pluck('karyawan.unit_organisasi_id');
 
-            $barChart = new Chart('chart_bar_divisi', new Title('Jumlah Karyawan Sudah Isi per Divisi'), null, new PlotArea(null, [$barSeries]), true, DataSeries::EMPTY_AS_GAP, new Title('Divisi'), new Title('Jumlah'));
-            $barChart->setTopLeftPosition('A' . $chartStartRow);
-            $barChart->setBottomRightPosition('H' . $chartEndRow);
-            $wsDash->addChart($barChart);
+                $effectiveUnitIds = collect($filterMeta['allowed_unit_ids'])
+                    ->merge($usedUnitIds)
+                    ->unique()
+                    ->values()
+                    ->toArray();
 
-            $pieCategories = [new DataSeriesValues(DataSeriesValues::DATASERIES_TYPE_STRING, 'DASHBOARD!$B$7:$B$' . $lastDivRow, null, $divCount)];
-            $pieValues     = [new DataSeriesValues(DataSeriesValues::DATASERIES_TYPE_NUMBER, 'DASHBOARD!$D$7:$D$' . $lastDivRow, null, $divCount)];
-
-            $pieSeries = new DataSeries(DataSeries::TYPE_PIECHART, null, range(0, count($pieValues) - 1), [], $pieCategories, $pieValues);
-            $pieChart  = new Chart('chart_pie_divisi', new Title('Porsi Isian per Divisi'), new Legend(Legend::POSITION_RIGHT, null, false), new PlotArea(null, [$pieSeries]), true, DataSeries::EMPTY_AS_GAP);
-            $pieChart->setTopLeftPosition('I' . $chartStartRow);
-            $pieChart->setBottomRightPosition('N' . $chartEndRow);
-            $wsDash->addChart($pieChart);
-        }
-
-        $wsData = $spreadsheet->createSheet();
-        $wsData->setTitle('DATA');
-
-        $maxPend  = 4;
-        $maxAnak  = 5;
-        $maxKarir = 3;
-        $maxPeng  = 3;
-
-        $dataHeaders   = $this->buildDataHeaders($maxPend, $maxAnak, $maxKarir, $maxPeng, false);
-        $lastColLetter = Coordinate::stringFromColumnIndex(count($dataHeaders));
-
-        $wsData->fromArray($dataHeaders, null, 'A1');
-        $wsData->getStyle("A1:{$lastColLetter}1")->applyFromArray($headerStyle);
-        $wsData->getRowDimension(1)->setRowHeight(28);
-
-        $rowData = 2;
-        $noData  = 1;
-        foreach ($sortedExport as $emp) {
-            $alList      = $alamatMap->get($emp->id) ?? collect();
-            $alKtp       = optional($alList->firstWhere('jenis_alamat', 'KTP'))->alamat_lengkap ?? '-';
-            $alDom       = optional($alList->firstWhere('jenis_alamat', 'DOMISILI'))->alamat_lengkap ?? '-';
-            $pas         = $pasanganMap->get($emp->id);
-            $tempatLahir = trim((string) ($emp->tempat_lahir ?? '')) ?: '-';
-
-            $pendList  = ($pendidikanMap->get($emp->id) ?? collect())->values();
-            $anakList  = ($anakMap->get($emp->id) ?? collect())->values();
-            $sukunList = ($sukunMap->get($emp->id) ?? collect())->values();
-            $pengList  = ($pengalamanMap->get($emp->id) ?? collect())->values();
-
-            $wsData->setCellValue("A{$rowData}", (string) $noData++);
-            $wsData->setCellValue("B{$rowData}", $emp->nama_lengkap);
-            $wsData->setCellValueExplicit("C{$rowData}", (string) ($emp->nip ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValueExplicit("D{$rowData}", (string) $emp->nik_ktp, DataType::TYPE_STRING);
-            $wsData->setCellValue("E{$rowData}", $emp->jenis_kelamin);
-            $wsData->setCellValue("F{$rowData}", $tempatLahir);
-            $wsData->setCellValue("G{$rowData}", $emp->tgl_lahir ?? '-');
-            $wsData->setCellValue("H{$rowData}", $emp->pendidikan_terakhir ?? '-');
-            $wsData->setCellValue("I{$rowData}", $emp->nama_ayah ?? '-');
-            $wsData->setCellValue("J{$rowData}", $emp->nama_ibu ?? '-');
-            $wsData->setCellValue("K{$rowData}", $alKtp);
-            $wsData->setCellValue("L{$rowData}", $alDom);
-            $wsData->setCellValueExplicit("M{$rowData}", (string) ($emp->no_wa ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValue("N{$rowData}", $emp->email ?? '-');
-            $wsData->setCellValue("O{$rowData}", $emp->nama_jabatan ?? '-');
-            $wsData->setCellValue("P{$rowData}", $emp->nama_unit ?? '-');
-            $wsData->setCellValue("Q{$rowData}", $emp->tgl_masuk_kerja);
-            $wsData->setCellValue("R{$rowData}", $emp->status_pernikahan);
-            $wsData->setCellValue("S{$rowData}", $emp->disabilitas ?? '-');
-            $wsData->setCellValue("T{$rowData}", $emp->nama_bank ?? '-');
-            $wsData->setCellValueExplicit("U{$rowData}", (string) ($emp->no_rekening ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValue("V{$rowData}", $emp->nama_pemilik_rekening ?? '-');
-            $wsData->setCellValueExplicit("W{$rowData}", (string) ($emp->no_bpjs_kesehatan ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValueExplicit("X{$rowData}", (string) ($emp->no_bpjs_ketenagakerjaan ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValueExplicit("Y{$rowData}", (string) ($emp->npwp ?? '-'), DataType::TYPE_STRING);
-            $wsData->setCellValue("Z{$rowData}", $pas->nama_pasangan ?? '-');
-            $wsData->setCellValue("AA{$rowData}", $pas->pekerjaan_pasangan ?? '-');
-            $wsData->setCellValue("AB{$rowData}", (string) $anakList->count());
-            $wsData->setCellValue("AC{$rowData}", "=IF(\$P{$rowData}=\"\",\"\",IFERROR(INDEX(MASTER!\$B\$2:\$B\${$lastMasterRow},MATCH(\$P{$rowData},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"PERLU DICEK\"))");
-            $wsData->setCellValue("AD{$rowData}", "=IF(\$P{$rowData}=\"\",\"\",IFERROR(INDEX(MASTER!\$C\$2:\$C\${$lastMasterRow},MATCH(\$P{$rowData},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\$P{$rowData}))");
-            $wsData->setCellValue("AE{$rowData}", $emp->status_verifikasi ?? '-');
-            $wsData->setCellValue("AF{$rowData}", $emp->created_at ?? '-');
-            $wsData->setCellValue("AG{$rowData}", $emp->golongan_darah ?? '-');
-            $wsData->setCellValue("AH{$rowData}", $emp->tipe_karyawan ?? '-');
-            $wsData->setCellValue("AI{$rowData}", $emp->ket_karyawan ?? '-');
-            $wsData->setCellValue("AJ{$rowData}", $emp->bersedia_transfer ?? '-');
-            $wsData->setCellValueExplicit("AK{$rowData}", (string) ($emp->no_anggota_koperasi ?? '-'), DataType::TYPE_STRING);
-
-            $colIdx = 38;
-
-            for ($i = 0; $i < $maxPend; $i++) {
-                $p = $pendList->get($i);
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $p->jenjang ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $p->nama_instansi ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $p->jurusan ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $p->nilai_ipk ?? '-');
+                $masterUnits = $allUnits->whereIn('id', $effectiveUnitIds)->values();
+                $divisiList  = $allDivisi->whereIn('id', $masterUnits->pluck('departemen_id')->unique())->values();
             }
 
-            for ($i = 0; $i < $maxAnak; $i++) {
-                $a = $anakList->get($i);
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $a->nama_anak ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $a->tgl_lahir_anak ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $a->pendidikan_anak ?? '-');
+            if (! empty($filterMeta['departemen'])) {
+                $divisiList  = $divisiList->where('nama_departemen', $filterMeta['departemen'])->values();
+                $masterUnits = $masterUnits->whereIn('departemen_id', $divisiList->pluck('id'))->values();
             }
 
-            for ($i = 0; $i < $maxKarir; $i++) {
-                $s = $sukunList->get($i);
-                $mulai   = ($s && $s->tgl_mulai) ? substr($s->tgl_mulai, 0, 4) : '-';
-                $selesai = ($s && $s->tgl_selesai) ? substr($s->tgl_selesai, 0, 4) : ($s ? 'Sekarang' : '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $s->unit_bagian ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $s->jabatan ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $mulai);
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $selesai);
-            }
-
-            for ($i = 0; $i < $maxPeng; $i++) {
-                $pg = $pengList->get($i);
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $pg->nama_perusahaan ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $pg->jabatan ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $pg->tahun_masuk ?? '-');
-                $wsData->setCellValue(Coordinate::stringFromColumnIndex($colIdx++) . $rowData, $pg->tahun_keluar ?? '-');
-            }
-
-            $rowData++;
-        }
-
-        unset($alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap);
-
-        $maxExportDropdownRow = max(500, $rowData + 100);
-        foreach (['C', 'D', 'M', 'U', 'W', 'X', 'Y', 'AK'] as $textCol) {
-            $wsData->getStyle("{$textCol}2:{$textCol}{$maxExportDropdownRow}")
-                ->getNumberFormat()
-                ->setFormatCode(NumberFormat::FORMAT_TEXT);
-        }
-
-        $this->applySheetDataDropdowns($wsData, $lastMasterRow, $maxExportDropdownRow, $maxPend, $maxAnak, false);
-
-        $baseWidths = [
-            'A' => 5, 'B' => 28, 'C' => 18, 'D' => 22, 'E' => 14, 'F' => 20, 'G' => 14,
-            'H' => 18, 'I' => 18, 'J' => 18, 'K' => 35, 'L' => 35, 'M' => 18,
-            'N' => 28, 'O' => 30, 'P' => 28, 'Q' => 28, 'R' => 16, 'S' => 20,
-            'T' => 16, 'U' => 20, 'V' => 26, 'W' => 18, 'X' => 18, 'Y' => 22,
-            'Z' => 24, 'AA' => 20, 'AB' => 10, 'AC' => 18, 'AD' => 28,
-            'AE' => 18, 'AF' => 20, 'AG' => 15, 'AH' => 16, 'AI' => 16, 'AJ' => 16, 'AK' => 18,
-        ];
-        foreach ($baseWidths as $col => $w) {
-            $wsData->getColumnDimension($col)->setWidth($w);
-        }
-        for ($c = 38; $c <= count($dataHeaders); $c++) {
-            $wsData->getColumnDimension(Coordinate::stringFromColumnIndex($c))->setWidth(22);
-        }
-
-        $wsCat = $spreadsheet->createSheet();
-        $wsCat->setTitle('CATATAN');
-        $wsCat->setCellValue('A1', 'PETUNJUK PENGGUNAAN & TEMPLATE IMPORT');
-        $wsCat->getStyle('A1')->getFont()->setBold(true)->setSize(12)->getColor()->setRGB('1F4E78');
-        $wsCat->getRowDimension(1)->setRowHeight(15.5);
-
-        $notes = [
-            ['1', "Jika menambah data baru secara manual di sheet DATA, salin (drag) rumus pada kolom 'Divisi' (AC) & 'Departemen / Unit' (AD) dari baris terakhir agar pemetaan unit otomatis."],
-            ['2', 'Sheet DATA pada file ini dapat langsung digunakan sebagai template Import Excel. Setiap data pendidikan, anak, karir Sukun, dan pengalaman luar sudah dipisah per kolom dan dilengkapi dropdown.'],
-            ['3', 'Khusus jenjang pendidikan dari SD sampai SMA/SMK, kolom Jurusan dan Nilai/IPK tidak wajib diisi (boleh dikosongkan atau diisi "-").'],
-            ['4', 'Data dengan NIK yang sudah terdaftar akan otomatis dilewati dengan notifikasi duplikat saat proses Import Excel.'],
-            ['5', "Isi kolom 'Target Karyawan' di sheet MASTER (khususnya PRODUKSI) agar kolom Belum Isi & % Isi terisi."],
-            ['6', 'File ini di-export langsung dari sistem pendataan karyawan PT. Sukun Wartono Indonesia.'],
-        ];
-        $rNote = 2;
-        foreach ($notes as $n) {
-            $wsCat->setCellValue("A{$rNote}", $n[0]);
-            $wsCat->setCellValue("B{$rNote}", $n[1]);
-            $wsCat->getStyle("B{$rNote}")->getAlignment()->setVertical(Alignment::VERTICAL_TOP)->setWrapText(true);
-            $wsCat->getRowDimension($rNote)->setRowHeight(29);
-            $rNote++;
-        }
-        $wsCat->getColumnDimension('A')->setWidth(28);
-        $wsCat->getColumnDimension('B')->setWidth(120);
-
-        $usedSheetNames = ['DASHBOARD', 'MASTER', 'DATA', 'CATATAN'];
-        $exportByDiv    = $sortedExport->groupBy('departemen_id');
-
-        $divisiSheetList = $divisiList->values();
-        if (! empty($filterMeta['has_filter'])
-            && empty($filterMeta['departemen'])
-            && empty($filterMeta['unit_id'])
-            && empty($filterMeta['unit_name'])) {
-            $activeDeptIds   = $sortedExport->pluck('departemen_id')->filter()->unique();
-            $divisiSheetList = $divisiSheetList->whereIn('id', $activeDeptIds)->values();
-        }
-
-        foreach ($divisiSheetList as $div) {
-            $baseName = mb_substr(trim(preg_replace('/[\\\\\/\?\*\[\]\:]/', ' ', $div->nama_departemen)), 0, 28);
-            if ($baseName === '') {
-                $baseName = 'DIVISI_' . $div->id;
-            }
-            $sheetName = $baseName;
-            $suffix = 2;
-            while (in_array(strtoupper($sheetName), $usedSheetNames, true)) {
-                $sheetName = mb_substr($baseName, 0, 27) . '_' . $suffix++;
-            }
-            $usedSheetNames[] = strtoupper($sheetName);
-
-            $wsDiv = $spreadsheet->createSheet();
-            $wsDiv->setTitle($sheetName);
-
-            $wsDiv->setCellValue('A1', 'REKAP DIVISI ' . strtoupper($div->nama_departemen) . ' — Pendataan Karyawan PT Sukun');
-            $wsDiv->getStyle('A1')->getFont()->setBold(true)->setSize(14)->getColor()->setRGB('1F4E78');
-
-            $wsDiv->setCellValue('A2', 'Update: ' . now()->format('d-m-Y') . ' | Isi kolom Target di sheet MASTER untuk melihat jumlah & % yang belum isi');
-            $wsDiv->getStyle('A2')->getFont()->setSize(10)->getColor()->setRGB('555555');
-
-            $divTopHeaders = ['No', 'Departemen / Unit Kerja', 'Target', 'Sudah Isi', 'Belum Isi', '% Isi', 'Status'];
-            $wsDiv->fromArray($divTopHeaders, null, 'A4');
-            $wsDiv->getStyle('A4:G4')->applyFromArray($headerStyle);
-            $wsDiv->getRowDimension(4)->setRowHeight(24);
-
-            $unitsInDiv = $masterUnits->where('departemen_id', $div->id)->values();
             if (! empty($filterMeta['unit_id'])) {
-                $unitsInDiv = $unitsInDiv->where('id', $filterMeta['unit_id'])->values();
+                $masterUnits = $masterUnits->where('id', $filterMeta['unit_id'])->values();
+                $divisiList  = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id'))->values();
             } elseif (! empty($filterMeta['unit_name'])) {
-                $unitsInDiv = $unitsInDiv->where('nama_unit', $filterMeta['unit_name'])->values();
+                $masterUnits = $masterUnits->where('nama_unit', $filterMeta['unit_name'])->values();
+                $divisiList  = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id'))->values();
             }
 
-            $rUnit = 5;
-            $noU   = 1;
-            foreach ($unitsInDiv as $u) {
-                $wsDiv->setCellValue("A{$rUnit}", $noU++);
-                $wsDiv->setCellValue("B{$rUnit}", $u->nama_unit);
-                $wsDiv->setCellValue("C{$rUnit}", "=IFERROR(INDEX(MASTER!\$D\$2:\$D\${$lastMasterRow},MATCH(\$B{$rUnit},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"\")");
-                $wsDiv->setCellValue("D{$rUnit}", "=COUNTIF(DATA!\$P\$2:\$P\${$lastDataRow},\$B{$rUnit})");
-                $wsDiv->setCellValue("E{$rUnit}", "=IF(OR(\$C{$rUnit}=\"\",\$C{$rUnit}=0),\"\",\$C{$rUnit}-\$D{$rUnit})");
-                $wsDiv->setCellValue("F{$rUnit}", "=IF(OR(\$C{$rUnit}=\"\",\$C{$rUnit}=0),\"\",\$D{$rUnit}/\$C{$rUnit})");
-                $wsDiv->setCellValue("G{$rUnit}", "=IF(\$D{$rUnit}=0,\"BELUM ADA YANG ISI\",IF(\$E{$rUnit}=\"\",\"SUDAH ADA ISIAN\",IF(\$E{$rUnit}>0,\"ADA YANG BELUM ISI\",\"LENGKAP\")))");
-                $rUnit++;
+            if (! empty($filterMeta['has_filter'])
+                && empty($filterMeta['departemen'])
+                && empty($filterMeta['unit_id'])
+                && empty($filterMeta['unit_name'])) {
+                $filteredUnitIds = (clone $query)->reorder()
+                    ->whereNotNull('karyawan.unit_organisasi_id')
+                    ->distinct()
+                    ->pluck('karyawan.unit_organisasi_id');
+
+                $masterUnits = $masterUnits->whereIn('id', $filteredUnitIds)->values();
+                $divisiList  = $divisiList->whereIn('id', $masterUnits->pluck('departemen_id')->unique())->values();
             }
 
-            $endUnitRow = max(5, $rUnit - 1);
-            if ($unitsInDiv->count() > 0) {
-                $wsDiv->getStyle("F5:F{$endUnitRow}")->getNumberFormat()->setFormatCode('0.0%');
-                $wsDiv->getStyle("A5:G{$endUnitRow}")->applyFromArray($cellBorder);
+            $lastMasterRow = max(2, $masterUnits->count() + 1);
+
+            $wsDash = $spreadsheet->getActiveSheet();
+            $wsDash->setTitle('DASHBOARD');
+
+            $wsDash->setCellValue('A1', 'DASHBOARD REKAP PENDATAAN KARYAWAN PT SUKUN KUDUS');
+            $wsDash->getStyle('A1')->getFont()->setBold(true)->setSize(14)->getColor()->setRGB('1F4E78');
+            $wsDash->getRowDimension(1)->setRowHeight(18.5);
+
+            $filterDesc = ! empty($filterMeta['labels'])
+                ? '  |  Filter aktif: ' . implode(', ', $filterMeta['labels'])
+                : '';
+            $wsDash->setCellValue('A2', 'Update terakhir: ' . now()->format('d-m-Y') . '  |  Sumber: export Sistem Pendataan HRD (' . $totalRows . ' respons)' . $filterDesc);
+            $wsDash->getStyle('A2')->getFont()->setSize(10)->getColor()->setRGB('555555');
+
+            $wsDash->setCellValue('A4', 'Ringkasan per Divisi');
+            $wsDash->getStyle('A4')->getFont()->setBold(true)->setSize(12);
+            $wsDash->setCellValue('I4', 'KPI');
+            $wsDash->getStyle('I4')->getFont()->setBold(true)->setSize(12);
+            $wsDash->getRowDimension(4)->setRowHeight(15.5);
+
+            $dashHeaders = ['No', 'Divisi', 'Jml Departemen', 'Sudah Isi', '% dari Total Isi', 'Departemen Terisi', 'Departemen Belum Terisi'];
+            $wsDash->fromArray($dashHeaders, null, 'A6');
+            $wsDash->getStyle('A6:G6')->applyFromArray($headerStyle);
+            $wsDash->getRowDimension(6)->setRowHeight(29);
+
+            $rowDash    = 7;
+            $noDiv      = 1;
+            $divCount   = $divisiList->count();
+            $totDashRow = 7 + $divCount;
+
+            foreach ($divisiList as $div) {
+                $wsDash->fromArray([
+                    $noDiv++,
+                    $div->nama_departemen,
+                    "=COUNTIF(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash})",
+                    "=COUNTIF(DATA!\$AC\$2:\$AC\${$lastDataRow},\$B{$rowDash})",
+                    "=IF(\$D\${$totDashRow}=0,0,\$D{$rowDash}/\$D\${$totDashRow})",
+                    "=COUNTIFS(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash},MASTER!\$E\$2:\$E\${$lastMasterRow},\">0\")",
+                    "=COUNTIFS(MASTER!\$B\$2:\$B\${$lastMasterRow},\$B{$rowDash},MASTER!\$E\$2:\$E\${$lastMasterRow},0)",
+                ], null, "A{$rowDash}");
+                $rowDash++;
             }
 
-            $totUnitRow = $rUnit;
-            $wsDiv->setCellValue("B{$totUnitRow}", 'TOTAL');
-            if ($unitsInDiv->count() > 0) {
-                $wsDiv->setCellValue("D{$totUnitRow}", "=SUM(D5:D{$endUnitRow})");
-                $wsDiv->setCellValue("E{$totUnitRow}", "=IF(SUM(\$C\$5:\$C\${$endUnitRow})=0,\"\",SUM(\$C\$5:\$C\${$endUnitRow})-SUM(\$D\$5:\$D\${$endUnitRow}))");
-                $wsDiv->setCellValue("F{$totUnitRow}", "=IF(SUM(\$C\$5:\$C\${$endUnitRow})=0,\"\",SUM(\$D\$5:\$D\${$endUnitRow})/SUM(\$C\$5:\$C\${$endUnitRow}))");
+            $lastDivRow = max(7, $rowDash - 1);
+            $wsDash->setCellValue("B{$totDashRow}", 'TOTAL');
+            if ($divCount > 0) {
+                $wsDash->fromArray([
+                    "=SUM(C7:C{$lastDivRow})",
+                    "=SUM(D7:D{$lastDivRow})",
+                    "=SUM(E7:E{$lastDivRow})",
+                    "=SUM(F7:F{$lastDivRow})",
+                    "=SUM(G7:G{$lastDivRow})",
+                ], null, "C{$totDashRow}");
             } else {
-                $wsDiv->setCellValue("D{$totUnitRow}", 0);
-            }
-            $wsDiv->getStyle("F{$totUnitRow}")->getNumberFormat()->setFormatCode('0.0%');
-            $wsDiv->getStyle("A{$totUnitRow}:G{$totUnitRow}")->applyFromArray($cellBorder);
-            $wsDiv->getStyle("B{$totUnitRow}")->getFont()->setBold(true);
-            $wsDiv->getStyle("D{$totUnitRow}:F{$totUnitRow}")->getFont()->setBold(true);
-
-            $empsInDiv  = ($exportByDiv->get($div->id) ?? collect())->sortBy(['nama_unit', 'nama_lengkap'])->values();
-            $rListTitle = $totUnitRow + 2;
-            $wsDiv->setCellValue("A{$rListTitle}", 'Daftar yang sudah isi (' . $empsInDiv->count() . ' karyawan)');
-            $wsDiv->getStyle("A{$rListTitle}")->getFont()->setBold(true)->setSize(12);
-
-            $rListHead = $rListTitle + 1;
-            $divListHeaders = ['No', 'Nama Lengkap', 'NIP', 'NIK', 'Tempat Lahir', 'Tgl Lahir', 'Jabatan', 'Unit (form)', 'Tanggal Masuk PT Sukun (YYYY-MM-DD)', 'Pernikahan', 'No HP/WA'];
-            $wsDiv->fromArray($divListHeaders, null, "A{$rListHead}");
-            $wsDiv->getStyle("A{$rListHead}:K{$rListHead}")->applyFromArray($headerStyle);
-            $wsDiv->getRowDimension($rListHead)->setRowHeight(24);
-
-            $rEmpStart = $rListHead + 1;
-            $rEmp      = $rEmpStart;
-            $noEmp     = 1;
-            foreach ($empsInDiv as $e) {
-                $tempatLahirEmp = trim((string) ($e->tempat_lahir ?? '')) ?: '-';
-
-                $wsDiv->setCellValue("A{$rEmp}", $noEmp++);
-                $wsDiv->setCellValue("B{$rEmp}", $e->nama_lengkap);
-                $wsDiv->setCellValueExplicit("C{$rEmp}", (string) ($e->nip ?? '-'), DataType::TYPE_STRING);
-                $wsDiv->setCellValueExplicit("D{$rEmp}", (string) $e->nik_ktp, DataType::TYPE_STRING);
-                $wsDiv->setCellValue("E{$rEmp}", $tempatLahirEmp);
-                $wsDiv->setCellValue("F{$rEmp}", $e->tgl_lahir ?? '-');
-                $wsDiv->setCellValue("G{$rEmp}", $e->nama_jabatan ?? '-');
-                $wsDiv->setCellValue("H{$rEmp}", $e->nama_unit ?? '-');
-                $wsDiv->setCellValue("I{$rEmp}", $e->tgl_masuk_kerja);
-                $wsDiv->setCellValue("J{$rEmp}", $e->status_pernikahan);
-                $wsDiv->setCellValueExplicit("K{$rEmp}", (string) ($e->no_wa ?? '-'), DataType::TYPE_STRING);
-                $rEmp++;
+                $wsDash->fromArray([0, 0, 0, 0, 0], null, "C{$totDashRow}");
             }
 
-            if ($rEmp > $rEmpStart) {
-                $lastEmpRow = $rEmp - 1;
-                $wsDiv->getStyle("A{$rEmpStart}:K{$lastEmpRow}")->applyFromArray($cellBorder);
+            $wsDash->getStyle("E7:E{$totDashRow}")->getNumberFormat()->setFormatCode('0.0%');
+            $wsDash->getStyle("A7:G{$totDashRow}")->applyFromArray($cellBorder);
+            $wsDash->getStyle("B{$totDashRow}:G{$totDashRow}")->getFont()->setBold(true);
+
+            foreach (['A' => 5, 'B' => 20, 'C' => 16, 'D' => 12, 'E' => 16, 'F' => 18, 'G' => 22, 'H' => 3, 'I' => 28, 'J' => 14] as $col => $w) {
+                $wsDash->getColumnDimension($col)->setWidth($w);
             }
 
-            foreach (['A' => 5, 'B' => 32, 'C' => 18, 'D' => 20, 'E' => 20, 'F' => 14, 'G' => 30, 'H' => 28, 'I' => 28, 'J' => 13, 'K' => 16] as $col => $w) {
-                $wsDiv->getColumnDimension($col)->setWidth($w);
+            $wsMaster = $spreadsheet->createSheet();
+            $wsMaster->setTitle('MASTER');
+            $masterHeaders = ['No', 'Divisi', 'Departemen / Unit Kerja', 'Target Karyawan (isi manual)', 'Sudah Isi', 'Belum Isi', '% Isi', 'Catatan'];
+            $wsMaster->fromArray($masterHeaders, null, 'A1');
+            $wsMaster->getStyle('A1:H1')->applyFromArray($headerStyle);
+            $wsMaster->getRowDimension(1)->setRowHeight(29);
+
+            $rowMaster = 2;
+            $noMaster  = 1;
+            foreach ($divisiList as $div) {
+                $unitsInDiv = $masterUnits->where('departemen_id', $div->id);
+                foreach ($unitsInDiv as $u) {
+                    $wsMaster->fromArray([
+                        $noMaster++,
+                        $div->nama_departemen,
+                        $u->nama_unit,
+                        null,
+                        "=COUNTIF(DATA!\$P\$2:\$P\${$lastDataRow},\$C{$rowMaster})",
+                        "=IF(\$D{$rowMaster}=\"\",\"\",\$D{$rowMaster}-\$E{$rowMaster})",
+                        "=IF(OR(\$D{$rowMaster}=\"\",\$D{$rowMaster}=0),\"\",\$E{$rowMaster}/\$D{$rowMaster})",
+                    ], null, "A{$rowMaster}");
+                    $rowMaster++;
+                }
             }
+
+            if ($rowMaster > 2) {
+                $endMasterRow = $rowMaster - 1;
+                $wsMaster->getStyle("G2:G{$endMasterRow}")->getNumberFormat()->setFormatCode('0.0%');
+                $wsMaster->getStyle("A2:H{$endMasterRow}")->applyFromArray($cellBorder);
+            }
+
+            foreach (['A' => 6, 'B' => 18, 'C' => 40, 'D' => 18, 'E' => 10, 'F' => 12, 'G' => 8, 'H' => 40] as $col => $w) {
+                $wsMaster->getColumnDimension($col)->setWidth($w);
+            }
+
+            $kpiItems = [
+                ['Total respons masuk', "=COUNTA(DATA!\$B\$2:\$B\${$lastDataRow})"],
+                ['Total departemen (master)', "=COUNTA(MASTER!\$C\$2:\$C\${$lastMasterRow})"],
+                ['Departemen sudah ada isian', "=COUNTIF(MASTER!\$E\$2:\$E\${$lastMasterRow},\">0\")"],
+                ['Departemen belum ada isian', "=COUNTIF(MASTER!\$E\$2:\$E\${$lastMasterRow},0)"],
+                ['% departemen terisi', "=IF(J6=0,0,J7/J6)"],
+            ];
+            $rKpi = 5;
+            foreach ($kpiItems as $kpi) {
+                $wsDash->fromArray($kpi, null, "I{$rKpi}");
+                $rKpi++;
+            }
+            $wsDash->getStyle('I5:J9')->applyFromArray($cellBorder);
+            $wsDash->getStyle('J5:J9')->getFont()->setBold(true);
+            $wsDash->getStyle('J9')->getNumberFormat()->setFormatCode('0.0%');
+
+            $wsData = $spreadsheet->createSheet();
+            $wsData->setTitle('DATA');
+
+            $maxPend  = 4;
+            $maxAnak  = 5;
+            $maxKarir = 3;
+            $maxPeng  = 3;
+
+            $dataHeaders   = $this->buildDataHeaders($maxPend, $maxAnak, $maxKarir, $maxPeng, false);
+            $lastColLetter = Coordinate::stringFromColumnIndex(count($dataHeaders));
+
+            $wsData->fromArray($dataHeaders, null, 'A1');
+            $wsData->getStyle("A1:{$lastColLetter}1")->applyFromArray($headerStyle);
+            $wsData->getRowDimension(1)->setRowHeight(28);
+
+            $rowData = 2;
+            $noData  = 1;
+
+            (clone $query)->reorder()->chunkById(500, function ($chunk) use (
+                $wsData,
+                &$rowData,
+                &$noData,
+                $lastMasterRow,
+                $maxPend,
+                $maxAnak,
+                $maxKarir,
+                $maxPeng
+            ) {
+                $ids = $chunk->pluck('id')->all();
+
+                $alamatMap = DB::table('alamat')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'jenis_alamat', 'alamat_lengkap')
+                    ->get()
+                    ->groupBy('karyawan_id');
+
+                $pasanganMap = DB::table('pasangan')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'nama_pasangan', 'pekerjaan_pasangan')
+                    ->get()
+                    ->keyBy('karyawan_id');
+
+                $anakMap = DB::table('anak')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'nama_anak', 'tgl_lahir_anak', 'pendidikan_anak')
+                    ->orderBy('anak_ke')
+                    ->get()
+                    ->groupBy('karyawan_id');
+
+                $pendidikanMap = DB::table('riwayat_pendidikan')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'jenjang', 'nama_instansi', 'jurusan', 'nilai_ipk')
+                    ->orderBy('id')
+                    ->get()
+                    ->groupBy('karyawan_id');
+
+                $sukunMap = DB::table('riwayat_pekerjaan_sukun')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'unit_bagian', 'jabatan', 'tgl_mulai', 'tgl_selesai')
+                    ->orderBy('id')
+                    ->get()
+                    ->groupBy('karyawan_id');
+
+                $pengalamanMap = DB::table('pengalaman_kerja_sebelum')
+                    ->whereIn('karyawan_id', $ids)
+                    ->select('karyawan_id', 'nama_perusahaan', 'jabatan', 'tahun_masuk', 'tahun_keluar')
+                    ->orderBy('id')
+                    ->get()
+                    ->groupBy('karyawan_id');
+
+                $chunkStartRow = $rowData;
+                $batchRows     = [];
+
+                foreach ($chunk as $emp) {
+                    $alList      = $alamatMap->get($emp->id) ?? collect();
+                    $alKtp       = optional($alList->firstWhere('jenis_alamat', 'KTP'))->alamat_lengkap ?: null;
+                    $alDom       = optional($alList->firstWhere('jenis_alamat', 'DOMISILI'))->alamat_lengkap ?: null;
+                    $pas         = $pasanganMap->get($emp->id);
+                    $tempatLahir = trim((string) ($emp->tempat_lahir ?? '')) ?: null;
+                    $golDarah    = ($emp->golongan_darah && $emp->golongan_darah !== '-') ? $emp->golongan_darah : null;
+
+                    $pendList  = ($pendidikanMap->get($emp->id) ?? collect())->values();
+                    $anakList  = ($anakMap->get($emp->id) ?? collect())->values();
+                    $sukunList = ($sukunMap->get($emp->id) ?? collect())->values();
+                    $pengList  = ($pengalamanMap->get($emp->id) ?? collect())->values();
+
+                    $rowValues = [
+                        $noData++,
+                        $emp->nama_lengkap ?: null,
+                        $emp->nip ?: null,
+                        $emp->nik_ktp ?: null,
+                        $emp->jenis_kelamin ?: null,
+                        $tempatLahir,
+                        $emp->tgl_lahir ?: null,
+                        $emp->pendidikan_terakhir ?: null,
+                        $emp->nama_ayah ?: null,
+                        $emp->nama_ibu ?: null,
+                        $alKtp,
+                        $alDom,
+                        $emp->no_wa ?: null,
+                        $emp->email ?: null,
+                        $emp->nama_jabatan ?: null,
+                        $emp->nama_unit ?: null,
+                        $emp->tgl_masuk_kerja ?: null,
+                        $emp->status_pernikahan ?: null,
+                        $emp->disabilitas ?: null,
+                        $emp->nama_bank ?: null,
+                        $emp->no_rekening ?: null,
+                        $emp->nama_pemilik_rekening ?: null,
+                        $emp->no_bpjs_kesehatan ?: null,
+                        $emp->no_bpjs_ketenagakerjaan ?: null,
+                        $emp->npwp ?: null,
+                        $pas->nama_pasangan ?? null,
+                        $pas->pekerjaan_pasangan ?? null,
+                        $anakList->count(),
+                        "=IF(\$P{$rowData}=\"\",\"\",IFERROR(INDEX(MASTER!\$B\$2:\$B\${$lastMasterRow},MATCH(\$P{$rowData},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"PERLU DICEK\"))",
+                        "=IF(\$P{$rowData}=\"\",\"\",IFERROR(INDEX(MASTER!\$C\$2:\$C\${$lastMasterRow},MATCH(\$P{$rowData},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\$P{$rowData}))",
+                        $emp->status_verifikasi ?: null,
+                        $emp->created_at ?: null,
+                        $golDarah,
+                        $emp->tipe_karyawan ?: null,
+                        $emp->ket_karyawan ?: null,
+                        $emp->bersedia_transfer ?: null,
+                        $emp->no_anggota_koperasi ?: null,
+                    ];
+
+                    for ($i = 0; $i < $maxPend; $i++) {
+                        $p = $pendList->get($i);
+                        array_push($rowValues, $p->jenjang ?? null, $p->nama_instansi ?? null, $p->jurusan ?? null, $p->nilai_ipk ?? null);
+                    }
+                    for ($i = 0; $i < $maxAnak; $i++) {
+                        $a = $anakList->get($i);
+                        array_push($rowValues, $a->nama_anak ?? null, $a->tgl_lahir_anak ?? null, $a->pendidikan_anak ?? null);
+                    }
+                    for ($i = 0; $i < $maxKarir; $i++) {
+                        $s       = $sukunList->get($i);
+                        $mulai   = ($s && $s->tgl_mulai) ? substr($s->tgl_mulai, 0, 4) : null;
+                        $selesai = ($s && $s->tgl_selesai) ? substr($s->tgl_selesai, 0, 4) : ($s ? 'Sekarang' : null);
+                        array_push($rowValues, $s->unit_bagian ?? null, $s->jabatan ?? null, $mulai, $selesai);
+                    }
+                    for ($i = 0; $i < $maxPeng; $i++) {
+                        $pg = $pengList->get($i);
+                        array_push($rowValues, $pg->nama_perusahaan ?? null, $pg->jabatan ?? null, $pg->tahun_masuk ?? null, $pg->tahun_keluar ?? null);
+                    }
+
+                    $batchRows[] = $rowValues;
+                    $rowData++;
+                }
+
+                if (! empty($batchRows)) {
+                    $wsData->fromArray($batchRows, null, "A{$chunkStartRow}", true);
+                }
+
+                unset($chunk, $ids, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap, $batchRows);
+            }, 'karyawan.id', 'id');
+
+            $maxExportDropdownRow = max(500, $rowData + 100);
+            foreach (['C', 'D', 'M', 'U', 'W', 'X', 'Y', 'AK'] as $textCol) {
+                $wsData->getStyle("{$textCol}2:{$textCol}{$maxExportDropdownRow}")
+                    ->getNumberFormat()
+                    ->setFormatCode(NumberFormat::FORMAT_TEXT);
+            }
+
+            $this->applySheetDataDropdowns($wsData, $lastMasterRow, $maxExportDropdownRow, $maxPend, $maxAnak, false);
+
+            $baseWidths = [
+                'A' => 5, 'B' => 28, 'C' => 18, 'D' => 22, 'E' => 14, 'F' => 20, 'G' => 14,
+                'H' => 18, 'I' => 18, 'J' => 18, 'K' => 35, 'L' => 35, 'M' => 18,
+                'N' => 28, 'O' => 30, 'P' => 28, 'Q' => 28, 'R' => 16, 'S' => 20,
+                'T' => 16, 'U' => 20, 'V' => 26, 'W' => 18, 'X' => 18, 'Y' => 22,
+                'Z' => 24, 'AA' => 20, 'AB' => 10, 'AC' => 18, 'AD' => 28,
+                'AE' => 18, 'AF' => 20, 'AG' => 15, 'AH' => 16, 'AI' => 16, 'AJ' => 16, 'AK' => 18,
+            ];
+            foreach ($baseWidths as $col => $w) {
+                $wsData->getColumnDimension($col)->setWidth($w);
+            }
+            for ($c = 38; $c <= count($dataHeaders); $c++) {
+                $wsData->getColumnDimension(Coordinate::stringFromColumnIndex($c))->setWidth(22);
+            }
+
+            $wsCat = $spreadsheet->createSheet();
+            $wsCat->setTitle('CATATAN');
+            $wsCat->setCellValue('A1', 'PETUNJUK PENGGUNAAN & TEMPLATE IMPORT');
+            $wsCat->getStyle('A1')->getFont()->setBold(true)->setSize(12)->getColor()->setRGB('1F4E78');
+            $wsCat->getRowDimension(1)->setRowHeight(15.5);
+
+            $notes = [
+                ['1', "Jika menambah data baru secara manual di sheet DATA, salin (drag) rumus pada kolom 'Divisi' (AC) & 'Departemen / Unit' (AD) dari baris terakhir agar pemetaan unit otomatis."],
+                ['2', 'Sheet DATA pada file ini dapat langsung digunakan sebagai template Import Excel. Setiap data pendidikan, anak, karir Sukun, dan pengalaman luar sudah dipisah per kolom dan dilengkapi dropdown.'],
+                ['3', 'Khusus jenjang pendidikan dari SD sampai SMA/SMK, kolom Jurusan dan Nilai/IPK tidak wajib diisi (boleh dikosongkan atau diisi "-").'],
+                ['4', 'Data dengan NIK yang sudah terdaftar akan otomatis dilewati dengan notifikasi duplikat saat proses Import Excel.'],
+                ['5', "Isi kolom 'Target Karyawan' di sheet MASTER (khususnya PRODUKSI) agar kolom Belum Isi & % Isi terisi."],
+                ['6', 'File ini di-export langsung dari sistem pendataan karyawan PT. Sukun Wartono Indonesia.'],
+            ];
+            $rNote = 2;
+            foreach ($notes as $n) {
+                $wsCat->fromArray($n, null, "A{$rNote}");
+                $wsCat->getStyle("B{$rNote}")->getAlignment()->setVertical(Alignment::VERTICAL_TOP)->setWrapText(true);
+                $wsCat->getRowDimension($rNote)->setRowHeight(29);
+                $rNote++;
+            }
+            $wsCat->getColumnDimension('A')->setWidth(28);
+            $wsCat->getColumnDimension('B')->setWidth(120);
+
+            $usedSheetNames  = ['DASHBOARD', 'MASTER', 'DATA', 'CATATAN'];
+            $divisiSheetList = $divisiList->values();
+
+            if (! empty($filterMeta['has_filter'])
+                && empty($filterMeta['departemen'])
+                && empty($filterMeta['unit_id'])
+                && empty($filterMeta['unit_name'])) {
+                $activeDeptIds   = (clone $query)->reorder()
+                    ->whereNotNull('karyawan.departemen_id')
+                    ->distinct()
+                    ->pluck('karyawan.departemen_id');
+                $divisiSheetList = $divisiSheetList->whereIn('id', $activeDeptIds)->values();
+            }
+
+            foreach ($divisiSheetList as $div) {
+                $baseName = mb_substr(trim(preg_replace('/[\\\\\/\?\*\[\]\:]/', ' ', $div->nama_departemen)), 0, 28);
+                if ($baseName === '') {
+                    $baseName = 'DIVISI_' . $div->id;
+                }
+                $sheetName = $baseName;
+                $suffix    = 2;
+                while (in_array(strtoupper($sheetName), $usedSheetNames, true)) {
+                    $sheetName = mb_substr($baseName, 0, 27) . '_' . $suffix++;
+                }
+                $usedSheetNames[] = strtoupper($sheetName);
+
+                $wsDiv = $spreadsheet->createSheet();
+                $wsDiv->setTitle($sheetName);
+
+                $wsDiv->setCellValue('A1', 'REKAP DIVISI ' . strtoupper($div->nama_departemen) . ' — Pendataan Karyawan PT Sukun');
+                $wsDiv->getStyle('A1')->getFont()->setBold(true)->setSize(14)->getColor()->setRGB('1F4E78');
+                $wsDiv->setCellValue('A2', 'Update: ' . now()->format('d-m-Y') . ' | Detail lengkap karyawan tersedia di sheet DATA');
+                $wsDiv->getStyle('A2')->getFont()->setSize(10)->getColor()->setRGB('555555');
+
+                $wsDiv->fromArray(['No', 'Departemen / Unit Kerja', 'Target', 'Sudah Isi', 'Belum Isi', '% Isi', 'Status'], null, 'A4');
+                $wsDiv->getStyle('A4:G4')->applyFromArray($headerStyle);
+                $wsDiv->getRowDimension(4)->setRowHeight(24);
+
+                $unitsInDiv = $masterUnits->where('departemen_id', $div->id)->values();
+                if (! empty($filterMeta['unit_id'])) {
+                    $unitsInDiv = $unitsInDiv->where('id', $filterMeta['unit_id'])->values();
+                } elseif (! empty($filterMeta['unit_name'])) {
+                    $unitsInDiv = $unitsInDiv->where('nama_unit', $filterMeta['unit_name'])->values();
+                }
+
+                $rUnit = 5;
+                $noU   = 1;
+                foreach ($unitsInDiv as $u) {
+                    $wsDiv->fromArray([
+                        $noU++,
+                        $u->nama_unit,
+                        "=IFERROR(INDEX(MASTER!\$D\$2:\$D\${$lastMasterRow},MATCH(\$B{$rUnit},MASTER!\$C\$2:\$C\${$lastMasterRow},0)),\"\")",
+                        "=COUNTIF(DATA!\$P\$2:\$P\${$lastDataRow},\$B{$rUnit})",
+                        "=IF(OR(\$C{$rUnit}=\"\",\$C{$rUnit}=0),\"\",\$C{$rUnit}-\$D{$rUnit})",
+                        "=IF(OR(\$C{$rUnit}=\"\",\$C{$rUnit}=0),\"\",\$D{$rUnit}/\$C{$rUnit})",
+                        "=IF(\$D{$rUnit}=0,\"BELUM ADA YANG ISI\",IF(\$E{$rUnit}=\"\",\"SUDAH ADA ISIAN\",IF(\$E{$rUnit}>0,\"ADA YANG BELUM ISI\",\"LENGKAP\")))",
+                    ], null, "A{$rUnit}");
+                    $rUnit++;
+                }
+
+                $endUnitRow = max(5, $rUnit - 1);
+                if ($unitsInDiv->count() > 0) {
+                    $wsDiv->getStyle("F5:F{$endUnitRow}")->getNumberFormat()->setFormatCode('0.0%');
+                    $wsDiv->getStyle("A5:G{$endUnitRow}")->applyFromArray($cellBorder);
+                }
+
+                $totUnitRow = $rUnit;
+                $wsDiv->setCellValue("B{$totUnitRow}", 'TOTAL');
+                if ($unitsInDiv->count() > 0) {
+                    $wsDiv->fromArray([
+                        "=SUM(D5:D{$endUnitRow})",
+                        "=IF(SUM(\$C\$5:\$C\${$endUnitRow})=0,\"\",SUM(\$C\$5:\$C\${$endUnitRow})-SUM(\$D\$5:\$D\${$endUnitRow}))",
+                        "=IF(SUM(\$C\$5:\$C\${$endUnitRow})=0,\"\",SUM(\$D\$5:\$D\${$endUnitRow})/SUM(\$C\$5:\$C\${$endUnitRow}))",
+                    ], null, "D{$totUnitRow}");
+                } else {
+                    $wsDiv->setCellValue("D{$totUnitRow}", 0);
+                }
+                $wsDiv->getStyle("F{$totUnitRow}")->getNumberFormat()->setFormatCode('0.0%');
+                $wsDiv->getStyle("A{$totUnitRow}:G{$totUnitRow}")->applyFromArray($cellBorder);
+                $wsDiv->getStyle("B{$totUnitRow}:F{$totUnitRow}")->getFont()->setBold(true);
+
+                foreach (['A' => 5, 'B' => 38, 'C' => 14, 'D' => 14, 'E' => 14, 'F' => 12, 'G' => 24] as $col => $w) {
+                    $wsDiv->getColumnDimension($col)->setWidth($w);
+                }
+            }
+
+            $spreadsheet->setActiveSheetIndex(0);
+
+            $tempDir = storage_path('app/temp');
+            if (! is_dir($tempDir)) {
+                mkdir($tempDir, 0755, true);
+            }
+
+            $fileName = 'REKAP_PENDATAAN_PT_SWI_' . date('Ymd_His') . '.xlsx';
+            $writer   = new Xlsx($spreadsheet);
+            $writer->setPreCalculateFormulas(false);
+            $writer->setUseDiskCaching(true, $tempDir);
+
+            $tempFile = tempnam($tempDir, 'swi_excel_');
+            gc_collect_cycles();
+            $writer->save($tempFile);
+
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet, $writer);
+
+            return response()->download($tempFile, $fileName, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ])->deleteFileAfterSend(true);
+        } finally {
+            Cell::setValueBinder($previousBinder);
+            $lock->release();
         }
-
-        $spreadsheet->setActiveSheetIndex(0);
-
-        $fileName = 'REKAP_PENDATAAN_PT_SWI_' . date('Ymd_His') . '.xlsx';
-        $writer   = new Xlsx($spreadsheet);
-        $writer->setIncludeCharts(true);
-        $writer->setPreCalculateFormulas(false);
-
-        $tempDir = storage_path('app/temp');
-        if (! is_dir($tempDir)) {
-            mkdir($tempDir, 0755, true);
-        }
-
-        $tempFile = tempnam($tempDir, 'swi_excel_');
-        $writer->save($tempFile);
-
-        $spreadsheet->disconnectWorksheets();
-        unset($spreadsheet, $writer);
-
-        return response()->download($tempFile, $fileName, [
-            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ])->deleteFileAfterSend(true);
     }
 
-    private function exportCsv($dataExport)
+    private function exportCsv($query)
     {
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
+        @set_time_limit(300);
 
-        $ids = $dataExport->pluck('id')->toArray();
+        if (session()->isStarted()) {
+            session()->save();
+        }
 
-        $alamatMap     = DB::table('alamat')->whereIn('karyawan_id', $ids)->get()->groupBy('karyawan_id');
-        $pasanganMap   = DB::table('pasangan')->whereIn('karyawan_id', $ids)->get()->keyBy('karyawan_id');
-        $anakMap       = DB::table('anak')->whereIn('karyawan_id', $ids)->orderBy('anak_ke')->get()->groupBy('karyawan_id');
-        $pendidikanMap = DB::table('riwayat_pendidikan')->whereIn('karyawan_id', $ids)->get()->groupBy('karyawan_id');
-        $sukunMap      = DB::table('riwayat_pekerjaan_sukun')->whereIn('karyawan_id', $ids)->get()->groupBy('karyawan_id');
-        $pengalamanMap = DB::table('pengalaman_kerja_sebelum')->whereIn('karyawan_id', $ids)->get()->groupBy('karyawan_id');
-
-        $sortedExport = $dataExport->sortBy('id')->values();
-
-        $response = new StreamedResponse(function () use ($sortedExport, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap) {
+        $response = new StreamedResponse(function () use ($query) {
             if (ob_get_level() > 0) {
                 ob_end_clean();
             }
 
+            DB::disableQueryLog();
             $handle = fopen('php://output', 'w');
             fwrite($handle, "\xEF\xBB\xBF");
 
@@ -2996,85 +3029,100 @@ class PendataanController extends Controller
             ]);
 
             $no = 1;
-            foreach ($sortedExport as $row) {
-                $alList      = $alamatMap->get($row->id) ?? collect();
-                $alamatKtp   = optional($alList->firstWhere('jenis_alamat', 'KTP'))->alamat_lengkap ?? '-';
-                $alamatDom   = optional($alList->firstWhere('jenis_alamat', 'DOMISILI'))->alamat_lengkap ?? '-';
-                $pasangan    = $pasanganMap->get($row->id);
-                $tempatLahir = trim((string) ($row->tempat_lahir ?? '')) ?: '-';
+            (clone $query)->reorder()->chunkById(500, function ($chunk) use ($handle, &$no) {
+                $ids = $chunk->pluck('id')->all();
 
-                $anakList   = $anakMap->get($row->id) ?? collect();
-                $anakCount  = $anakList->count();
-                $detailAnak = $anakList->map(function ($a) {
-                    return "{$a->anak_ke}. {$a->nama_anak}" . ($a->tgl_lahir_anak ? " ({$a->tgl_lahir_anak})" : '') . ($a->pendidikan_anak ? " - {$a->pendidikan_anak}" : '');
-                })->implode(' | ') ?: '-';
+                $alamatMap     = DB::table('alamat')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'jenis_alamat', 'alamat_lengkap')->get()->groupBy('karyawan_id');
+                $pasanganMap   = DB::table('pasangan')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'nama_pasangan', 'pekerjaan_pasangan')->get()->keyBy('karyawan_id');
+                $anakMap       = DB::table('anak')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'anak_ke', 'nama_anak', 'tgl_lahir_anak', 'pendidikan_anak')->orderBy('anak_ke')->get()->groupBy('karyawan_id');
+                $pendidikanMap = DB::table('riwayat_pendidikan')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'jenjang', 'nama_instansi', 'jurusan')->get()->groupBy('karyawan_id');
+                $sukunMap      = DB::table('riwayat_pekerjaan_sukun')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'unit_bagian', 'jabatan', 'tgl_mulai', 'tgl_selesai')->get()->groupBy('karyawan_id');
+                $pengalamanMap = DB::table('pengalaman_kerja_sebelum')->whereIn('karyawan_id', $ids)->select('karyawan_id', 'nama_perusahaan', 'jabatan', 'tahun_masuk', 'tahun_keluar')->get()->groupBy('karyawan_id');
 
-                $pendList   = $pendidikanMap->get($row->id) ?? collect();
-                $detailPend = $pendList->map(function ($p) {
-                    return "{$p->jenjang} - {$p->nama_instansi}" . ($p->jurusan ? " ({$p->jurusan})" : '');
-                })->implode(' | ') ?: '-';
+                foreach ($chunk as $row) {
+                    $alList      = $alamatMap->get($row->id) ?? collect();
+                    $alamatKtp   = optional($alList->firstWhere('jenis_alamat', 'KTP'))->alamat_lengkap ?? '-';
+                    $alamatDom   = optional($alList->firstWhere('jenis_alamat', 'DOMISILI'))->alamat_lengkap ?? '-';
+                    $pasangan    = $pasanganMap->get($row->id);
+                    $tempatLahir = trim((string) ($row->tempat_lahir ?? '')) ?: '-';
 
-                $sukunList   = $sukunMap->get($row->id) ?? collect();
-                $detailSukun = $sukunList->map(function ($s) {
-                    $mulai   = $s->tgl_mulai ? substr($s->tgl_mulai, 0, 4) : '?';
-                    $selesai = $s->tgl_selesai ? substr($s->tgl_selesai, 0, 4) : 'Sekarang';
-                    return "{$s->unit_bagian} ({$s->jabatan}: {$mulai}-{$selesai})";
-                })->implode(' | ') ?: '-';
+                    $anakList   = $anakMap->get($row->id) ?? collect();
+                    $anakCount  = $anakList->count();
+                    $detailAnak = $anakList->map(function ($a) {
+                        return "{$a->anak_ke}. {$a->nama_anak}" . ($a->tgl_lahir_anak ? " ({$a->tgl_lahir_anak})" : '') . ($a->pendidikan_anak ? " - {$a->pendidikan_anak}" : '');
+                    })->implode(' | ') ?: '-';
 
-                $pengList   = $pengalamanMap->get($row->id) ?? collect();
-                $detailPeng = $pengList->map(function ($pg) {
-                    return "{$pg->nama_perusahaan} ({$pg->jabatan}: {$pg->tahun_masuk}-{$pg->tahun_keluar})";
-                })->implode(' | ') ?: '-';
+                    $pendList   = $pendidikanMap->get($row->id) ?? collect();
+                    $detailPend = $pendList->map(function ($p) {
+                        return "{$p->jenjang} - {$p->nama_instansi}" . ($p->jurusan ? " ({$p->jurusan})" : '');
+                    })->implode(' | ') ?: '-';
 
-                fputcsv($handle, [
-                    $no++,
-                    $row->nama_lengkap,
-                    $row->nip ?? '-',
-                    $row->nik_ktp,
-                    $row->jenis_kelamin,
-                    $tempatLahir,
-                    $row->tgl_lahir,
-                    $row->golongan_darah ?? '-',
-                    $row->pendidikan_terakhir ?? '-',
-                    $row->jurusan ?? '-',
-                    $row->nama_instansi ?? '-',
-                    $row->nilai ?? '-',
-                    $detailPend,
-                    $row->nama_ayah ?? '-',
-                    $row->nama_ibu ?? '-',
-                    $alamatKtp,
-                    $alamatDom,
-                    $row->no_wa ?? '-',
-                    $row->email ?? '-',
-                    $row->nama_departemen ?? '-',
-                    $row->nama_unit ?? '-',
-                    $row->tipe_karyawan ?? '-',
-                    $row->ket_karyawan ?? '-',
-                    $row->nama_jabatan ?? '-',
-                    $row->nama_jabatan_borong ?? '-',
-                    $row->nama_kota ?? '-',
-                    $row->nama_area ?? '-',
-                    $row->tgl_masuk_kerja,
-                    $row->status_pernikahan,
-                    $pasangan?->nama_pasangan ?? '-',
-                    $pasangan?->pekerjaan_pasangan ?? '-',
-                    $anakCount,
-                    $detailAnak,
-                    $row->disabilitas ?? '-',
-                    $row->nama_bank ?? '-',
-                    $row->no_rekening ?? '-',
-                    $row->nama_pemilik_rekening ?? '-',
-                    $row->bersedia_transfer ?? '-',
-                    $row->no_bpjs_kesehatan ?? '-',
-                    $row->no_bpjs_ketenagakerjaan ?? '-',
-                    $row->npwp ?? '-',
-                    $row->no_anggota_koperasi ?? '-',
-                    $detailSukun,
-                    $detailPeng,
-                    $row->status_verifikasi ?? '-',
-                    $row->created_at ?? '-',
-                ]);
-            }
+                    $sukunList   = $sukunMap->get($row->id) ?? collect();
+                    $detailSukun = $sukunList->map(function ($s) {
+                        $mulai   = $s->tgl_mulai ? substr($s->tgl_mulai, 0, 4) : '?';
+                        $selesai = $s->tgl_selesai ? substr($s->tgl_selesai, 0, 4) : 'Sekarang';
+                        return "{$s->unit_bagian} ({$s->jabatan}: {$mulai}-{$selesai})";
+                    })->implode(' | ') ?: '-';
+
+                    $pengList   = $pengalamanMap->get($row->id) ?? collect();
+                    $detailPeng = $pengList->map(function ($pg) {
+                        return "{$pg->nama_perusahaan} ({$pg->jabatan}: {$pg->tahun_masuk}-{$pg->tahun_keluar})";
+                    })->implode(' | ') ?: '-';
+
+                    fputcsv($handle, [
+                        $no++,
+                        $row->nama_lengkap,
+                        $row->nip ?? '-',
+                        $row->nik_ktp,
+                        $row->jenis_kelamin,
+                        $tempatLahir,
+                        $row->tgl_lahir,
+                        $row->golongan_darah ?? '-',
+                        $row->pendidikan_terakhir ?? '-',
+                        $row->jurusan ?? '-',
+                        $row->nama_instansi ?? '-',
+                        $row->nilai ?? '-',
+                        $detailPend,
+                        $row->nama_ayah ?? '-',
+                        $row->nama_ibu ?? '-',
+                        $alamatKtp,
+                        $alamatDom,
+                        $row->no_wa ?? '-',
+                        $row->email ?? '-',
+                        $row->nama_departemen ?? '-',
+                        $row->nama_unit ?? '-',
+                        $row->tipe_karyawan ?? '-',
+                        $row->ket_karyawan ?? '-',
+                        $row->nama_jabatan ?? '-',
+                        $row->nama_jabatan_borong ?? '-',
+                        $row->nama_kota ?? '-',
+                        $row->nama_area ?? '-',
+                        $row->tgl_masuk_kerja,
+                        $row->status_pernikahan,
+                        $pasangan?->nama_pasangan ?? '-',
+                        $pasangan?->pekerjaan_pasangan ?? '-',
+                        $anakCount,
+                        $detailAnak,
+                        $row->disabilitas ?? '-',
+                        $row->nama_bank ?? '-',
+                        $row->no_rekening ?? '-',
+                        $row->nama_pemilik_rekening ?? '-',
+                        $row->bersedia_transfer ?? '-',
+                        $row->no_bpjs_kesehatan ?? '-',
+                        $row->no_bpjs_ketenagakerjaan ?? '-',
+                        $row->npwp ?? '-',
+                        $row->no_anggota_koperasi ?? '-',
+                        $detailSukun,
+                        $detailPeng,
+                        $row->status_verifikasi ?? '-',
+                        $row->created_at ?? '-',
+                    ]);
+                }
+
+                unset($chunk, $ids, $alamatMap, $pasanganMap, $anakMap, $pendidikanMap, $sukunMap, $pengalamanMap);
+                fflush($handle);
+            }, 'karyawan.id', 'id');
+
             fclose($handle);
         });
 
@@ -3206,11 +3254,11 @@ class PendataanController extends Controller
         [$query, $filterMeta] = $this->buildDashboardQuery($request);
 
         if ($request->input('export') === 'excel') {
-            return $this->exportExcel($query->get(), $filterMeta);
+            return $this->exportExcel($query, $filterMeta);
         }
 
         if ($request->input('export') === 'csv') {
-            return $this->exportCsv($query->get());
+            return $this->exportCsv($query);
         }
 
         $totalData = (clone $query)->reorder()->count('karyawan.id');
@@ -3257,11 +3305,11 @@ class PendataanController extends Controller
         [$query, $filterMeta] = $this->buildDashboardQuery($request, $unitIds, $extraKaryawanIds);
 
         if ($request->input('export') === 'excel') {
-            return $this->exportExcel($query->get(), $filterMeta);
+            return $this->exportExcel($query, $filterMeta);
         }
 
         if ($request->input('export') === 'csv') {
-            return $this->exportCsv($query->get());
+            return $this->exportCsv($query);
         }
 
         $totalData = (clone $query)->reorder()->count('karyawan.id');
